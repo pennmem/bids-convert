@@ -1,10 +1,14 @@
+import cmlreaders as cml
+import mne
+import numpy as np
+import pandas as pd
 import os
 from glob import glob
 import shutil
-import numpy as np
 import mne_bids
 import cmlreaders as cml
 import mne
+import time
 
 class UnknownElectrodeCapError(Exception):
     pass
@@ -13,7 +17,12 @@ class MultiplePathsError(FileExistsError):
 
 class ScalpBIDSConverter:
     event_column_dict = {
-        "ltpFR": ['answer', 'case', 'color_b', 'color_g', 'color_r', 'distractor', 'eegfile', 'eegoffset', 'eogArtifact', 'experiment', 'final_distractor', 'final_math_correct', 'finalrecalled', 'font', 'intruded', 'intrusion', 'iscorrect', 'item_name', 'item_num', 'list', 'listtype', 'math_correct', 'montage', 'msoffset', 'mstime', 'phase', 'protocol', 'recalled', 'recog_conf', 'recog_resp', 'recog_rt', 'recognized', 'rectime', 'rej_time', 'rejected', 'resp', 'rt', 'serialpos', 'session', 'studytrial', 'subject', 'task', 'test', 'trial', 'type']}
+        "ltpFR": ['subject', 'experiment', 'session', 'trial', 'task', 'item_name', 'item_num', 'recog_conf', 'resp', 
+                  'answer', 'test_x', 'test_y', 'test_z', 'color_b', 'color_g', 'color_r', 'case', 'font'],
+        "ltpFR2": ['subject', 'experiment', 'session', 'trial', 'item_name', 'item_num',
+                   'list', 'answer', 'test_x', 'test_y', 'test_z'],
+        "VFFR": ['subject', 'experiment', 'session', 'trial', 'item_name', 'item_num', 'too_fast']
+    }
     def __init__(self, subject, experiment, session, root="/scratch/PEERS_BIDS/", overwrite=True):
         self.root = root
         self.subject = subject
@@ -27,16 +36,19 @@ class ScalpBIDSConverter:
         self.raw_file = self.load_scalp_eeg()
         self.set_wordpool()
         self.events = self.load_events()
-        self.write_bids(overwrite=overwrite)
+        self.write_bids(temp_path=f"/scratch/jrudoler/{int(time.time()*100)}_temp.edf", overwrite=overwrite)
     
     def locate_raw_file(self):
         # hacky way to find all matching files!
-        raw_file = glob(f"/data[0-9]/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.raw*") + \
-                glob(f"/data1[0-2]/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.raw*") + \
-                glob(f"/data[0-9]/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.bdf*") + \
-                glob(f"/data1[0-2]/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.bdf*") + \
-                glob(f"/data[0-9]/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.mff*") + \
-                glob(f"/data1[0-2]/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.mff*")
+#         raw_file = glob(f"/data[0-9]/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.raw*") + \
+#                 glob(f"/data1[0-2]/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.raw*") + \
+#                 glob(f"/data[0-9]/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.bdf*") + \
+#                 glob(f"/data1[0-2]/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.bdf*") + \
+#                 glob(f"/data[0-9]/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.mff*") + \
+#                 glob(f"/data1[0-2]/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.mff*")
+        raw_file = glob(f"/data/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.raw*") + \
+                glob(f"/data/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.bdf*") + \
+                glob(f"/data/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.mff*")
         if len(raw_file)==0:
             raise FileNotFoundError
         elif len(raw_file)>1:
@@ -98,6 +110,7 @@ class ScalpBIDSConverter:
                 raise UnknownElectrodeCapError
         else:
             raise UnknownElectrodeCapError
+            
     def set_wordpool(self):
         if self.experiment=='ltpFR':
             if self.subject <= 'LTP159':
@@ -108,7 +121,7 @@ class ScalpBIDSConverter:
             self.wordpool_file = "wordpools/wasnorm_wordpool_576.txt"
         else:
             raise Exception("Wordpool not known for this experiment.")
-
+    
     def load_events(self):
         reader = cml.CMLReader(self.subject, self.experiment, self.session)
         events = reader.load('events')
@@ -119,12 +132,14 @@ class ScalpBIDSConverter:
             events = events.drop(columns=["test"])
         events['onset'] = events['sample'] / self.sfreq
         events['duration'] = "n/a"
+        events['stim_file'] = np.where(events.trial_type.str.contains("WORD"), self.wordpool_file, "n/a")
         events = events.fillna("n/a")
         events = events.replace("", "n/a")
         events = events.replace("-999", "n/a")
         events = events.replace(-999, "n/a")
-        standard_cols = ['onset', 'duration', "trial_type", "sample"]
-        cols_to_include = cls.event_column_dict[self.experiment]
+        standard_cols = ['onset', 'duration', "trial_type", "sample", 'stim_file']
+        cols_to_include = ScalpBIDSConverter.event_column_dict[self.experiment]
+        cols_to_include = [col for col in cols_to_include if col in events.columns]
         events = events[standard_cols + cols_to_include]
         return events
     
@@ -163,4 +178,3 @@ class ScalpBIDSConverter:
             )
         self.events.to_csv(os.path.join(bids_path.directory, bids_path.basename+"_events.tsv"),
                            sep="\t", index=False)
-        
