@@ -34,6 +34,7 @@ class ScalpBIDSConverter:
             self.unzip_raw_files()
         self.file_type = os.path.splitext(self.raw_filepath)[1]
         self.raw_file = self.load_scalp_eeg()
+        self.set_montage()
         self.set_wordpool()
         self.events = self.load_events()
         self.write_bids(temp_path=f"/scratch/jrudoler/{int(time.time()*100)}_temp.edf", overwrite=overwrite)
@@ -92,7 +93,7 @@ class ScalpBIDSConverter:
             self.raw_file.set_channel_types({'EXG1':'eog', 'EXG2':'eog', 'EXG3':'eog', 'EXG4':'eog',
                                              'EXG5':'misc', 'EXG6':'misc', 'EXG7':'misc', 'EXG8':'misc'})
         
-        elif self.file_type in (".raw", ".mff"):
+        elif self.file_type in (".raw", ".mff", ".edf"):
             self.raw_file.rename_channels({'E129': 'Cz'})
             if "cal+" in self.raw_file.ch_names:
                 # GSN HydroCel caps
@@ -110,6 +111,7 @@ class ScalpBIDSConverter:
                 raise UnknownElectrodeCapError
         else:
             raise UnknownElectrodeCapError
+        self.montage = self.raw_file.get_montage()
             
     def set_wordpool(self):
         if self.experiment=='ltpFR':
@@ -159,10 +161,11 @@ class ScalpBIDSConverter:
             except FileExistsError as e:
                 print(e)
             edf_file = mne.io.read_raw_edf(temp_path, preload=False)
+            edf_file.set_montage(self.montage)
             mne_bids.write_raw_bids(
                 edf_file,
                 events_data=None,
-                montage=self.raw_file.get_montage(),
+                montage=self.montage,
                 bids_path=bids_path,
                 overwrite=overwrite
             )
@@ -172,7 +175,7 @@ class ScalpBIDSConverter:
             mne_bids.write_raw_bids(
                 self.raw_file,
                 events_data=None,
-                montage=self.raw_file.get_montage(),
+                montage=self.montage,
                 bids_path=bids_path,
                 overwrite=overwrite
             )
