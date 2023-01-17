@@ -23,21 +23,22 @@ class ScalpBIDSConverter:
                    'list', 'answer', 'test_x', 'test_y', 'test_z'],
         "VFFR": ['subject', 'experiment', 'session', 'trial', 'item_name', 'item_num', 'too_fast']
     }
-    def __init__(self, subject, experiment, session, root="/scratch/PEERS_BIDS/", overwrite=True):
+    def __init__(self, subject, experiment, session, root="/scratch/PEERS_BIDS/", overwrite_eeg=True, overwrite_beh=True):
         self.root = root
         self.subject = subject
         self.experiment = experiment
         self.session = session
         self.load_subject_info()
+        self.set_wordpool()
+        self.write_bids_beh(overwrite=overwrite_beh)
         self.raw_filepath = self.locate_raw_file()
         if self.raw_filepath.endswith(".bz2"):
             self.unzip_raw_files()
         self.file_type = os.path.splitext(self.raw_filepath)[1]
         self.raw_file = self.load_scalp_eeg()
         self.set_montage()
-        self.set_wordpool()
         self.events = self.load_events()
-        self.write_bids(temp_path=f"/scratch/jrudoler/{int(time.time()*100)}_temp.edf", overwrite=overwrite)
+        self.write_bids_eeg(temp_path=f"/scratch/jrudoler/{int(time.time()*100)}_temp.edf", overwrite=overwrite_eeg)
     
     def locate_raw_file(self):
         # hacky way to find all matching files!
@@ -88,27 +89,39 @@ class ScalpBIDSConverter:
                 self.raw_filepath = output_path
     
     def set_montage(self):
+        ## TODO: add sidecar info
+        self.eeg_sidecar = {"PowerLineFrequency":60.0}
         if self.file_type == ".bdf":
-            self.raw_file = self.raw_file.set_montage('biosemi128')
+            self.raw_file.set_montage('biosemi128')
             self.raw_file.set_channel_types({'EXG1':'eog', 'EXG2':'eog', 'EXG3':'eog', 'EXG4':'eog',
                                              'EXG5':'misc', 'EXG6':'misc', 'EXG7':'misc', 'EXG8':'misc'})
-        
+            self.eeg_sidecar["Manufacturer"] = "BioSemi"
+            self.eeg_sidecar["CapManufacturer"] = "BioSemi"
         elif self.file_type in (".raw", ".mff", ".edf"):
+            self.eeg_sidecar["Manufacturer"] = "EGI"
+            self.eeg_sidecar["CapManufacturer"] = "EGI"
+            self.eeg_sidecar["EEGReference"] = "Cz"
             self.raw_file.rename_channels({'E129': 'Cz'})
-            if "cal+" in self.raw_file.ch_names:
-                # GSN HydroCel caps
-                self.raw_file.set_montage("montage_files/egi128_GSN_HydroCel.sfp")
-                self.raw_file.set_channel_types({'E8': 'eog', 'E25': 'eog', 'E126': 'eog',
-                           'E127': 'eog', 'Cz': 'misc'})
-                ## peripheral [127 126]
-            elif "sync" in self.raw_file.ch_names:
+            if "sync" in self.raw_file.ch_names:
                 # GSN 200 v2.1 caps
-                self.raw_file.set_montage("montage_files/egi128_GSN_200.sfp")
+                self.eeg_sidecar["CapManufacturersModelName"] = "Geodisic Sensor Net 200 v2.1"
+                mon = mne.channels.read_custom_montage("montage_files/egi128_GSN_200.sfp")
+                self.raw_file.set_montage(mon)
                 self.raw_file.set_channel_types({'E8': 'eog', 'E26': 'eog', 'E126': 'eog', 
-                                            'E127': 'eog', 'Cz': 'misc'})
+                                            'E127': 'eog'})
+                ## peripheral electrodes tend to flip up during the session, and get poor signal
                 ## peripheral [127 126 17 128 125 120 44 49 56 63 69 74 82 89 95 100 108 114]
             else:
-                raise UnknownElectrodeCapError
+#             elif "DI15" in self.raw_file.ch_names:
+                # GSN HydroCel caps
+                self.eeg_sidecar["CapManufacturersModelName"] = "HydroCel Geodisic Sensor Net"
+                mon = mne.channels.read_custom_montage("montage_files/egi128_GSN_HydroCel.sfp")
+                self.raw_file.set_montage(mon)
+                self.raw_file.set_channel_types({'E8': 'eog', 'E25': 'eog', 'E126': 'eog',
+                           'E127': 'eog'})
+                ## peripheral [127 126]
+#             else:
+#                 raise UnknownElectrodeCapError
         else:
             raise UnknownElectrodeCapError
         self.montage = self.raw_file.get_montage()
@@ -124,7 +137,7 @@ class ScalpBIDSConverter:
         else:
             raise Exception("Wordpool not known for this experiment.")
     
-    def load_events(self):
+    def load_events(self, beh_only=False):
         reader = cml.CMLReader(self.subject, self.experiment, self.session)
         events = reader.load('events')
         events = events.rename(columns={"eegoffset":"sample", "type":"trial_type"})
@@ -132,40 +145,58 @@ class ScalpBIDSConverter:
         if "test" in events.columns:
             events[["test_x", "test_y", "test_z"]] = events['test'].apply(pd.Series)
             events = events.drop(columns=["test"])
-        events['onset'] = events['sample'] / self.sfreq
-        events['duration'] = "n/a"
+        if beh_only:
+            standard_cols = ["mstime", "trial_type", 'stim_file']
+            events["mstime"] = events["mstime"] - events["mstime"].iloc[0]
+        else:
+            events['onset'] = events['sample'] / self.sfreq
+            events['duration'] = "n/a"
+            standard_cols = ['onset', 'duration', "trial_type", "sample", 'stim_file']
         events['stim_file'] = np.where(events.trial_type.str.contains("WORD"), self.wordpool_file, "n/a")
         events = events.fillna("n/a")
         events = events.replace("", "n/a")
         events = events.replace("-999", "n/a")
         events = events.replace(-999, "n/a")
-        standard_cols = ['onset', 'duration', "trial_type", "sample", 'stim_file']
         cols_to_include = ScalpBIDSConverter.event_column_dict[self.experiment]
         cols_to_include = [col for col in cols_to_include if col in events.columns]
         events = events[standard_cols + cols_to_include]
         return events
     
     def load_subject_info(self):
+        #TODO
         pass
     
-    def write_bids(self, temp_path="temp.edf", overwrite=True):
+    def write_bids_beh(self, overwrite=True):
+        events = self.load_events(beh_only=True)
+        bids_path = mne_bids.BIDSPath(subject=self.subject,
+                                          session=str(self.session),
+                                          task=self.experiment,
+                                          datatype="beh",
+                                          suffix="events",
+                                          extension=".tsv",
+                                          root=self.root)
+        os.makedirs(bids_path.directory, exist_ok=True)
+        events.to_csv(bids_path.fpath, sep="\t", index=False)
+    
+    def write_bids_eeg(self, temp_path="temp.edf", overwrite=True):
         bids_path = mne_bids.BIDSPath(subject=self.subject,
                                           session=str(self.session),
                                           task=self.experiment,
                                           datatype="eeg",
                                           root=self.root)
+#         import pdb;pdb.set_trace()
         if self.file_type != ".bdf":
             try:
-                mne.export.export_raw(temp_path, self.raw_file)
+                mne.export.export_raw(temp_path, self.raw_file, add_ch_type=True)
                 print("temp file created")
             except FileExistsError as e:
                 print(e)
-            edf_file = mne.io.read_raw_edf(temp_path, preload=False)
+            edf_file = mne.io.read_raw_edf(temp_path, preload=False, infer_types=True)
             edf_file.set_montage(self.montage)
             mne_bids.write_raw_bids(
                 edf_file,
                 events_data=None,
-                montage=self.montage,
+#                 montage=self.montage,
                 bids_path=bids_path,
                 overwrite=overwrite
             )
@@ -175,9 +206,11 @@ class ScalpBIDSConverter:
             mne_bids.write_raw_bids(
                 self.raw_file,
                 events_data=None,
-                montage=self.montage,
+#                 montage=self.montage,
                 bids_path=bids_path,
                 overwrite=overwrite
             )
         self.events.to_csv(os.path.join(bids_path.directory, bids_path.basename+"_events.tsv"),
                            sep="\t", index=False)
+        mne_bids.update_sidecar_json(bids_path.update(suffix="eeg", extension=".json"),
+                                     self.eeg_sidecar, verbose=True)
