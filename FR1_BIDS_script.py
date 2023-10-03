@@ -397,3 +397,11 @@ class FR1_Bids:
             self.eeg_mono = self.eeg_mono_to_BIDS()
             self.write_BIDS_ieeg('monopolar')                      # write monopolar iEEG to BIDS format
             self.write_BIDS_channels('monopolar')
+            
+            
+            
+            
+print(f'Running {sys.argv[1], sys.argv[3]}')            
+converter = FR1_Bids(sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4]), bool(sys.argv[5]), bool(sys.argv[6]), bool(sys.argv[7]), bool(sys.argv[8]))
+converter.run()
+print(f'Bids Conversion Complete')
