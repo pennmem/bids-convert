@@ -1,0 +1,28 @@
+FR1 BIDS conversion
+
+Items worked on:
+- Determine missing system_version information.
+- Practice list serial positions 0-11, instead of 1-12.
+- Serial position does not encode prior list intrusion information.
+- Loading all sessions.  Check for events, contacts, pairs, monopolar, bipolar eeg.
+- Depth, grid, strip, micro electrodes.
+- Replace NaN or empty cells with 'n/a'.
+- Mapping each subject-session to mni, tal, monopolar, bipolar.
+- Determine different wordpools.
+- Change negative durations to 0 so mne doesn't get mad.
+- Electrode hemispheres, based off of x coordinate.
+- Find all unique event types and make descriptors.
+- Participants.tsv with age, sex, handedness information from REDCAP.
+
+
+Quality Checks:
+- No linear transformation of voltage traces (write mne objects in V).
+- Signal to noise ratio = 
+- Serial position 1-12.
+- Monopolar and bipolar channels group labels all letters.
+- Electrode hemispheres all 'L' or 'R' and group labels all letters.
+
+Items still to work on:
+- Incorporating electrode surface area information (area.txt).
+- Parallelization overwriting (jobs restarting).
+- Pair labels too long (mne angry if over 16 characters).

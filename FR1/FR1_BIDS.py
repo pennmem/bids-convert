@@ -61,6 +61,7 @@ class FR1_Bids:
         events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type'})     # rename columns
         events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0        # onset from first event [ms]
         events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0   # event duration [ms]
+        events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)             # replace events with negative duration with 0.0 s
         events['response_time'] = 'n/a'                                                            # response time [ms]
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV') | 
                    (events.trial_type=='PROB'), 'response_time'] = events['duration']           # slightly superfluous
@@ -72,6 +73,8 @@ class FR1_Bids:
         events = events.drop(columns=['intrusion', 'recalled'])                    # dropping because confusing
         if 'PRACTICE_WORD' in events.trial_type.unique():                                # practice words wrongly given serial positions 0-11
             events.loc[events.trial_type=='PRACTICE_WORD', 'serialpos'] = events['serialpos'] + 1
+        events = events.fillna('n/a')                                             # change NaN to 'n/a'
+        events = events.replace('', 'n/a')                                        # try to resolve empty cell issue
         
         events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name', 
                         'serialpos', 'list', 'test', 'answer', 'experiment', 'session', 'subject']]       # re-order columns
@@ -183,6 +186,8 @@ class FR1_Bids:
         electrodes['group'] = [re.sub('\d+', '', x) for x in self.contacts.label]
         electrodes['hemisphere'] = ['L' if x < 0 else 'R' if x > 0 else 'n/a' for x in electrodes.x]   # use coordinates for hemisphere
         electrodes['type'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.contacts.type]     # not exactly what is meant by type field
+        electrodes = electrodes.fillna('n/a')                         # remove NaN
+        electrodes = electrodes.replace('', 'n/a')                    # resolve empty cell issue
         
         return electrodes
     
@@ -204,7 +209,7 @@ class FR1_Bids:
         if atlas == 'tal':
             return {'iEEGCoordinateSystem': 'Talairach', 'iEEGCoordinateUnits': 'mm'}
         elif atlas == 'mni':
-            return {'iEEGCoordinateSystem:': 'MNI152NLin6ASym', 'iEEGCoordinateUnits': 'mm'}
+            return {'iEEGCoordinateSystem': 'MNI152NLin6ASym', 'iEEGCoordinateUnits': 'mm'}
         
     def write_BIDS_coords(self, atlas):
         if atlas == 'tal':
@@ -230,7 +235,7 @@ class FR1_Bids:
         if self.system_version == 1.0:
             channels['units'] = 'arbitrary'        # don't have system 1 units
         else:
-            channels['units'] = 'uV'
+            channels['units'] = 'V'
         channels['low_cutoff'] = 'n/a'        # highpass filter
         channels['high_cutoff'] = 'n/a'       # lowpass filter (mne adds Nyquist frequency = 2 x sampling rate)
         channels['reference'] = 'bipolar'
@@ -247,7 +252,7 @@ class FR1_Bids:
         if self.system_version == 1.0:
             channels['units'] = 'arbitrary'        # dont' have system 1 units
         else:
-            channels['units'] = 'uV'
+            channels['units'] = 'V'
         channels['low_cutoff'] = 'n/a'
         channels['high_cutoff'] = 'n/a'
         # channels['reference'] = 'intracranial' # 'mastoid'         # should explain that the data should be rereferenced 
@@ -331,9 +336,9 @@ class FR1_Bids:
         if self.system_version == 2.0:
             eeg.data = eeg.data / 4000000.0    # convert from 250 nV to V
         elif self.system_version >= 3.0 and self.system_version < 4.0:
-            eeg.data = eeg.data / 1000000.0    # convert from 0.1 uV to V
+            eeg.data = eeg.data / 10000000.0    # convert from 0.1 uV to V
         eeg_mne = eeg.to_mne()
-        eeg_mne.metadata = self.events
+        #eeg_mne.metadata = self.events         # mne-bids automatically adds events annotations when reading (from events.tsv)
         mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_mono.type]))
         eeg_mne.set_channel_types(mapping)     # set channel types
         
@@ -343,11 +348,13 @@ class FR1_Bids:
     def eeg_bi_to_BIDS(self):
         eeg = self.reader.load_eeg(scheme=self.pairs)   # convert to V before instantiating raw object
         if self.system_version == 2.0:
+            #eeg.data = eeg.data / 4.0          # convert from 250 nV to uV
             eeg.data = eeg.data / 4000000.0    # convert from 250 nV to V
         elif self.system_version >= 3.0 and self.system_version < 4.0:
-            eeg.data = eeg.data / 1000000.0    # convert from 0.1 uV to V
+            #eeg.data = eeg.data / 10           # convert from 0.1 uV to uV
+            eeg.data = eeg.data / 10000000.0    # convert from 0.1 uV to V
         eeg_mne = eeg.to_mne()
-        eeg_mne.metadata = self.events           
+        #eeg_mne.metadata = self.events         # mne-bids automatically adds events annotation when reading (from events.tsv)       
         mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_bi.type]))
         eeg_mne.set_channel_types(mapping)      # set channel types
             
