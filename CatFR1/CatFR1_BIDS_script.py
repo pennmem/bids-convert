@@ -5,7 +5,9 @@ import numpy as np
 import re
 import json
 import os
+import pickle
 import mne_bids
+import sys
 
 class CatFR1_Bids:
     ELEC_TYPES_DESCRIPTION = {'S': 'strip', 'G': 'grid', 'D': 'depth', 'uD': 'micro'}
@@ -393,3 +395,47 @@ class CatFR1_Bids:
             self.write_BIDS_ieeg('monopolar')                      # write monopolar iEEG to BIDS format
             self.write_BIDS_channels('monopolar')
             
+            
+# load in metadata
+with open('/home1/hherrema/programming_data/BIDS_convert/catFR1/metadata/sub_sys_dict.pkl', 'rb') as f:
+    sub_sys_dict = pickle.load(f)
+    
+with open('/home1/hherrema/programming_data/BIDS_convert/catFR1/metadata/atlas_ref_dict.json', 'r') as f:
+    atlas_ref_dict = json.load(f)
+
+with open('/home1/hherrema/programming_data/BIDS_convert/catFR1/metadata/area_dict.json', 'r') as f:
+    area_dict = json.load(f)
+
+with open('/home1/hherrema/programming_data/BIDS_convert/catFR1/metadata/pairs_too_long.pkl', 'rb') as f:
+    pairs_too_long = pickle.load(f)
+    
+with open('/home1/hherrema/programming_data/BIDS_convert/catFR1/metadata/groups_num.pkl', 'rb') as f:
+    groups_num = pickle.load(f)
+    
+with open('/home1/hherrema/programming_data/BIDS_convert/catFR1/metadata/good_area.pkl', 'rb') as f:
+    good_area = pickle.load(f)
+            
+# run multiple sessions sequentially by iterating over dataframe
+df = cml.get_data_index('r1')
+df_select = df[df.experiment=='catFR1']
+df_select = df_select[df_select.system_version != 4.0]
+for _, row in df_select[int(sys.argv[1]):int(sys.argv[2])].iterrows():
+    sub = row.subject
+    exp = row.experiment
+    sess = row.session
+    sysv = sub_sys_dict.get(sub)
+    submd = atlas_ref_dict.get(sub); sessmd = submd.get(f'session_{sess}')
+    if (sysv == 2.0 or sysv == 3.0) and (sessmd.get('monopolar') and sessmd.get('bipolar')) and sub in good_area and sub not in pairs_too_long and sub not in groups_num:
+        print(f'Running {sub, sess}')
+        print('----------------------')
+        converter = CatFR1_Bids(sub, exp, sess, sysv, sessmd.get('mni'), sessmd.get('tal'), sessmd.get('monopolar'), sessmd.get('bipolar'), True)
+        converter.run()
+        print('Bids Conversion Complete')
+        print('----------------------')
+            
+print('All Iterated Sessions Complete')
+            
+#print(f'Running {sys.argv[1], sys.argv[3]}')            
+#converter = CatFR1_Bids(sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4]), bool(int(sys.argv[5])), bool(int(sys.argv[6])), bool(int(sys.argv[7])), #bool(int(sys.argv[8])), bool(int(sys.argv[9])))
+#converter.run()
+#print(f'Bids Conversion Complete')
