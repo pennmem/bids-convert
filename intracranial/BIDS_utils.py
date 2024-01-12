@@ -4,7 +4,7 @@ import pandas as pd
 
 # ---------- BIDS Utility ----------
 
-# return a base BIDS_path object to 
+# return a base BIDS_path object to update
 def BIDS_path(self):
     bids_path = mne_bids.BIDS_path(subject=self.subject, task=self.experiment, session=str(self.session),
                                     root=self.root)
