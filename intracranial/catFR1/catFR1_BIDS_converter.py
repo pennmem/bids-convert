@@ -6,7 +6,7 @@ import re
 import json
 import os
 import mne_bids
-from . import intracranial_BIDS_converter
+from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
 class catFR1_BIDS_converter(intracranial_BIDS_converter):
     wordpool_categorized_EN = np.loadtxt('wordpools/wordpool_categorized_EN.txt', dtype=str)

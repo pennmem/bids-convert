@@ -6,7 +6,6 @@ import re
 import json
 import os
 import mne_bids
-#from BIDS_utils import BIDS_path
 
 
 class intracranial_BIDS_converter:
