@@ -13,8 +13,9 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     wordpool_EN = np.loadtxt('wordpools/wordpool_EN.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, root='/scratch/hherrema/BIDS_storage/pyFR/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, root)
+    # just hand empty dictionary for brain_regions
+    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS_storage/pyFR/'):
+        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
 
     # ---------- Events ----------
     def set_wordpool(self):
@@ -138,6 +139,21 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type', 
                                 'lobe', 'region1', 'region2', 'gray_white']]      # enforce column order
         return electrodes
+    
+    def electrodes_sidecar(self):
+        sidecar = {'name': 'Label of electrode'}
+        sidecar['x'] = 'x-axis position'
+        sidecar['y'] = 'y-axis position'
+        sidecar['z'] = 'z-axis position'
+        sidecar['size'] = 'Surface area of electrode.'
+        sidecar['group'] = 'Group of channels electrode belongs to (same shank).'
+        sidecar['hemisphere'] = 'Hemisphere of electrode location.'
+        sidecar['type'] = 'Type of electrode.'
+        sidecar['lobe'] = 'Brain lobe of electrode location.'
+        sidecar['region1'] = 'Brain region of electrode location.'
+        sidecar['region2'] = 'Brain region of electrode location.'
+        sidecar['gray_white'] = 'Denotes gray or white matter.'
+        return sidecar
     
     # ---------- Channels ----------
     def load_pairs(self):

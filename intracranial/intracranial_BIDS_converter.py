@@ -11,9 +11,10 @@ import mne_bids
 class intracranial_BIDS_converter:
     ELEC_TYPES_DESCRIPTION = {'S': 'strip', 'G': 'grid', 'D': 'depth', 'uD': 'micro'}
     ELEC_TYPES_BIDS = {'S': 'ECOG', 'G': 'ECOG', 'D': 'SEEG', 'uD': 'SEEG'}
+    BRAIN_REGIONS = ['wb.region', 'ind.region', 'das.region', 'stein.region']
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, root='/scratch/hherrema/BIDS_storage/'):
+    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS_storage/'):
         self.subject = subject
         self.experiment = experiment
         self.session = session
@@ -24,6 +25,7 @@ class intracranial_BIDS_converter:
         self.mni = mni
         self.tal = tal
         self.area = area
+        self.brain_regions = brain_regions   # dictionary mapping target regions to number of non-NaN contacts
         self.root = root
 
     # ---------- BIDS Utility ----------
@@ -81,18 +83,50 @@ class intracranial_BIDS_converter:
         electrodes['x'] = self.contacts[f'{atlas}.x']
         electrodes['y'] = self.contacts[f'{atlas}.y']
         electrodes['z'] = self.contacts[f'{atlas}.z']
-        electrodes['group'] = [re.sub('\d+', '', x) for x in self.contacts.label]
+        # electrode groups (shanks)
+        groups = []
+        for _, row in self.contacts.iterrows():
+            split_label = list(row.label)
+            dig_idx = [i for i, c in enumerate(split_label) if c.isdigit()]     # indicies of digits in label
+            alpha_idx = [i for i, c in enumerate(split_label) if c.isalpha()]   # indices of alphabetical characters in label
+            groups.append(row.label[:alpha_idx[-1]+1])                          # select values before final digits
+        electrodes['group'] = groups
+        #electrodes['group'] = [re.sub('\d+', '', x) for x in self.contacts.label]
         if self.area:       # use area data if available
             electrodes['size'] = [self.area_map.get(x) if x in self.area_map.keys() else -999 for x in electrodes.group]
         else:
             electrodes['size'] = -999
         electrodes['hemisphere'] = ['L' if x < 0 else 'R' if x > 0 else 'n/a' for x in electrodes.x]        # use coordinates for hemisphere
         electrodes['type'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.contacts.type]
+        # anatomical regions
+        for br in self.BRAIN_REGIONS:
+            if self.brain_regions[br] > 0:
+                electrodes[br] = self.contacts[br]
         electrodes = electrodes.fillna('n/a')                                   # remove NaN
         electrodes = electrodes.replace('', 'n/a')                              # resolve empty cell issue
         electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type']]          # re-order columns
         return electrodes
     
+    # create sidecar json for electrodes.tsv
+    def make_electrodes_sidecar(self):
+        sidecar = {'name': 'Label of electrode.'}
+        sidecar['x'] = 'x-axis position'
+        sidecar['y'] = 'y-axis position'
+        sidecar['z'] = 'z-axis position'
+        sidecar['size'] = 'Surface area of electrode.'
+        sidecar['group'] = 'Group of channels electrode belongs to (same shank).'
+        sidecar['hemisphere'] = 'Hemisphere of electrode location.'
+        sidecar['type'] = 'Type of electrode.'
+        if self.brain_regions['wb.region'] > 0:
+            sidecar['wb.region'] = 'Brain region of electrode location from subcortical neuroradiology pipeline.'
+        if self.brain_regions['ind.region'] > 0:
+            sidecar['ind.region'] = 'Brain region of electrode location from surface neuroradiology pipeline.'
+        if self.brain_regions['das.region'] > 0:
+            sidecar['das.region'] = 'Brain region of electrode location from hand annotations by neuroradiologist.  Usually in MTL.'
+        if self.brain_regions['stein.region'] > 0:
+            sidecar['stein.region'] = 'Brain region of electrode location from hand annotations by neurologist.  Usuall in MTL.'
+        return sidecar
+
     def write_BIDS_electrodes(self, atlas):
         bids_path = self._BIDS_path().update(suffix='electrodes', extension='.tsv', datatype='ieeg')
         # COULD DO AWAY WITH SEPARATE tal AND mni ATTRIBUTES
@@ -104,6 +138,10 @@ class intracranial_BIDS_converter:
             bids_path.update(space='MNI152NLin6ASym')
             os.makedirs(bids_path.directory, exist_ok=True)
             self._to_tsv(self.electrodes_mni, bids_path.fpath)
+
+        # also write sidecar json
+        with open(bids_path.update(extension='.json').fpath, 'w') as f:
+            json.dump(fp=f, obj=self.electrodes_sidecar)
 
     def _coordinate_system(self, atlas):
         if atlas == 'tal':
@@ -244,7 +282,7 @@ class intracranial_BIDS_converter:
     def run(self):
         # ---------- Events ----------
         self.reader = self.cml_reader()
-        self.wordpool_file = self.set_worpool()
+        self.wordpool_file = self.set_wordpool()
         self.events = self.events_to_BIDS()
         self.write_BIDS_beh()
 
@@ -253,6 +291,7 @@ class intracranial_BIDS_converter:
 
         # ---------- Electrodes ----------
         self.contacts = self.load_contacts()
+        self.electrodes_sidecar = self.make_electrodes_sidecar()
         if self.mni:
             self.electrodes_mni = self.contacts_to_electrodes('mni')
             self.write_BIDS_electrodes('mni')
