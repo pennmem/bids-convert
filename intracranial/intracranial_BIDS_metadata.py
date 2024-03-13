@@ -28,10 +28,10 @@ class intracranial_BIDS_metadata:
         return df.query("experiment==@self.experiment")
     
     # try to load events, contacts, pairs, monopolar and bipolar EEG
-    # determine system_version, unit_scale, mni, tal, area
+    # determine system_version, unit_scale, mni, tal, area, eegfiles
     def metadata(self):
         metadata_df = pd.DataFrame(columns=['subject', 'experiment', 'session', 'system_version', 'unit_scale', 
-                                            'monopolar', 'bipolar', 'mni', 'tal', 'area'])
+                                            'monopolar', 'bipolar', 'mni', 'tal', 'area', 'brain_regions', 'eegfiles'])
         for _, row in tqdm(self.df_select.iterrows()):
             reader = cml.CMLReader(subject=row.subject, experiment=row.experiment, session=row.session, 
                                    localization=row.localization, montage=row.montage)
@@ -62,13 +62,16 @@ class intracranial_BIDS_metadata:
                 bipolar = False
             
             # determine system_version and unit_scale
-            system_version, unit_scale = self._sysv_units(self, row)
+            system_version, unit_scale = self._sysv_units(row)
 
             # determine area --> don't actually make the mapping here
-            area = self._area_data(self, row)
+            area = self._area_data(row)
 
             # create dictionary mapping brain regions to number of contacts with valid entries
-            brain_regions = self._brain_regions(self, row)
+            brain_regions = self._brain_regions(row)
+
+            # determine number of EEG files
+            eegfiles = self._n_eegfiles(reader)
 
             # append to dataframe of metadata
             metadata_df = pd.concat([metadata_df, 
@@ -76,7 +79,7 @@ class intracranial_BIDS_metadata:
                                                    'events':events_bool, 'contacts':contacts_bool, 'pairs':pairs_bool, 
                                                    'system_version':system_version, 'unit_scale':unit_scale, 
                                                    'monopolar':monopolar, 'bipolar':bipolar, 'mni':mni, 'tal':tal, 'area':area, 
-                                                   'brain_regions':brain_regions}, index=[len(metadata_df.index)])])
+                                                   'brain_regions':brain_regions, 'eegfiles':eegfiles}, index=[len(metadata_df.index)])])
             
         return metadata_df
     
@@ -233,3 +236,14 @@ class intracranial_BIDS_metadata:
         else:
             return {'wb.region':regions['wb.region'].iloc[0], 'ind.region':regions['ind.region'].iloc[0],
                     'das.region':regions['das.region'].iloc[0], 'stein.region':regions['stein.region'].iloc[0]}
+        
+    def _n_eegfiles(self, reader):
+        # load events
+        try:
+            events = reader.load('events')
+            # number of eegfile values
+            eegfiles = [x for x in events['eegfile'].unique() if x != '']
+            return len(eegfiles)
+        except BaseException as e:
+            return 0
+
