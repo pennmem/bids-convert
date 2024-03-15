@@ -17,7 +17,7 @@ import string
 class intracranial_BIDS_metadata:
     BRAIN_REGIONS = ['wb.region', 'ind.region', 'das.region', 'stein.region']
 
-    def __init__(self, experiment, root='/home1/hherrema/programming_data/BIDS_convert/'):
+    def __init__(self, experiment, root='/home1/hherrema/BIDS/'):
         self.experiment = experiment
         self.root = root
         self.df_select = self.load_exp_cmlreaders()
