@@ -31,7 +31,8 @@ class intracranial_BIDS_metadata:
     # determine system_version, unit_scale, mni, tal, area, eegfiles
     def metadata(self):
         metadata_df = pd.DataFrame(columns=['subject', 'experiment', 'session', 'system_version', 'unit_scale', 
-                                            'monopolar', 'bipolar', 'mni', 'tal', 'area', 'brain_regions', 'eegfiles'])
+                                            'monopolar', 'bipolar', 'mni', 'tal', 'area', 'wb.region', 'ind.region', 
+                                            'das.region', 'stein.region', 'eegfiles'])
         for _, row in tqdm(self.df_select.iterrows()):
             reader = cml.CMLReader(subject=row.subject, experiment=row.experiment, session=row.session, 
                                    localization=row.localization, montage=row.montage)
@@ -79,7 +80,9 @@ class intracranial_BIDS_metadata:
                                                    'events':events_bool, 'contacts':contacts_bool, 'pairs':pairs_bool, 
                                                    'system_version':system_version, 'unit_scale':unit_scale, 
                                                    'monopolar':monopolar, 'bipolar':bipolar, 'mni':mni, 'tal':tal, 'area':area, 
-                                                   'brain_regions':brain_regions, 'eegfiles':eegfiles}, index=[len(metadata_df.index)])])
+                                                   'wb.region':brain_regions['wb.region'], 'ind.region':brain_regions['ind.region'], 
+                                                   'das.region':brain_regions['das.region'], 'stein.region':brain_regions['stein.region'], 
+                                                   'eegfiles':eegfiles}, index=[len(metadata_df.index)])])
             
         return metadata_df
     
@@ -119,7 +122,7 @@ class intracranial_BIDS_metadata:
         except BaseException as e:
             return False
         
-    def _load_eeg(reader, ref):
+    def _load_eeg(self, reader, ref):
         if ref == 'bipolar':
             pairs = reader.load('pairs')
             try:
@@ -141,12 +144,11 @@ class intracranial_BIDS_metadata:
         if math.isnan(row.system_version):
             # do some detective work
             system_version = self._determine_system_version(row)
-            unit_scale = self._determine_unit_scale(system_version)
+            unit_scale = self._determine_unit_scale(row, system_version)
         elif row.system_version == 1.0:
             system_version = row.system_version
             # have to determine units
-            unit_scale = self._determine_unit_scale(system_version)
-            raise NotImplementedError
+            unit_scale = self._determine_unit_scale(row, system_version)
         elif row.system_version == 2.0 or row.system_version == 4.0:     # convert from 250 nV to V
             system_version = row.system_version
             unit_scale = 4000000.0
@@ -158,11 +160,18 @@ class intracranial_BIDS_metadata:
         
         return system_version, unit_scale
     
+    # query results from system_version_finder.py for NaN system versions
+    def _determine_system_version(self, row):
+        sys_vers = pd.read_csv('system_versions.csv')
+        sv = sys_vers[(sys_vers.subject == row.subject) & (sys_vers.experiment==row.experiment) & 
+                      (sys_vers.session == row.session)]
+        return sv.iloc[0].system_version
+    
     # sleuth system version by inferring from files
     # elemem folder = system 4
     # .ns2 = system 2
     # .h5 = system 3
-    def _determine_system_version(self, row):
+    def _determine_system_version_search(self, row):
         sub_root = f'/data10/RAM/subjects/{row.subject}/'
         if self._system_4(row, sub_root):
             return 4.0
@@ -172,14 +181,10 @@ class intracranial_BIDS_metadata:
             return 2.0
         else:
             return 1.0
-            
-        # check system 2
-        raw_dir = root + f'raw'
-        raise NotImplementedError
     
     def _system_4(self, row, sub_root):
         sess_dir = sub_root + f'behavioral/{row.experiment}/session_{row.session}/'
-        return 'elemem' in os.listdir(sess_dir)
+        return os.path.exists(sess_dir) and 'elemem' in os.listdir(sess_dir)
     
     def _system_3(self, row, sub_root):
         sess_dir = sub_root + f'behavioral/{row.experiment}/session_{row.session}/'
@@ -220,7 +225,7 @@ class intracranial_BIDS_metadata:
             return 10000000.0
         else:
             # read in from csv
-            sys1_units = pd.read_csv('sys1_units.csv')
+            sys1_units = pd.read_csv('system_1_unit_conversions.csv')
             return sys1_units[sys1_units.subject == row.subject].iloc[0]['conversion_to_V']
     
     def _area_data(self, row):
