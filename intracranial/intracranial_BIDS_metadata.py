@@ -143,7 +143,10 @@ class intracranial_BIDS_metadata:
     def _sysv_units(self, row):
         if math.isnan(row.system_version):
             # do some detective work
-            system_version = self._determine_system_version(row)
+            if row.experiment == 'pyFR':    # pyFR = system 1
+                system_version == 1.0
+            else:
+                system_version = self._determine_system_version(row)
             unit_scale = self._determine_unit_scale(row, system_version)
         elif row.system_version == 1.0:
             system_version = row.system_version
