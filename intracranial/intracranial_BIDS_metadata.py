@@ -144,7 +144,7 @@ class intracranial_BIDS_metadata:
         if math.isnan(row.system_version):
             # do some detective work
             if row.experiment == 'pyFR':    # pyFR = system 1
-                system_version == 1.0
+                system_version = 1.0
             else:
                 system_version = self._determine_system_version(row)
             unit_scale = self._determine_unit_scale(row, system_version)
