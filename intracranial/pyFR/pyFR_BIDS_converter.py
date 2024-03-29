@@ -10,7 +10,7 @@ import scipy
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
 class pyFR_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('wordpools/wordpool_EN.txt', dtype=str)
+    wordpool_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/pyFR/wordpools/wordpool_EN.txt', dtype=str)
 
     # initialize
     # just hand empty dictionary for brain_regions
