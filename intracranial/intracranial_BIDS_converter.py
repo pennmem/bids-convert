@@ -257,7 +257,7 @@ class intracranial_BIDS_converter:
     def eeg_metadata(self):
         eeg = self.reader.load_eeg()
         sfreq = eeg.samplerate
-        recording_duration = eeg.data.shape[-1] / self.sfreq
+        recording_duration = eeg.data.shape[-1] / sfreq
         return sfreq, recording_duration
     
     def eeg_sidecar(self, ref):
