@@ -74,49 +74,80 @@ class intracranial_BIDS_converter:
         return self.reader.load('contacts')
     
     def generate_area_map(self):
-        raise NotImplementedError       # implement here
+        area_path = f'/data10/RAM/subjects/{self.subject}/docs/area.txt'
+        try:
+            area = np.loadtxt(area_path, dtype=str)
+            self.area_map = dict(zip(area[:, 0], area[:, 1].astype(float)))
+        except BaseException:
+            self.area_map = {}
     
     # convert CML contacts to BIDS electrodes
-    def contacts_to_electrodes(self, atlas):
+    def contacts_to_electrodes(self, atlas, toggle):
         # MAY NEED EDGE CASES
         electrodes = pd.DataFrame({'name': np.array(self.contacts.label)})      # name = label of contact
         electrodes['x'] = self.contacts[f'{atlas}.x']
         electrodes['y'] = self.contacts[f'{atlas}.y']
         electrodes['z'] = self.contacts[f'{atlas}.z']
+        
         # electrode groups (shanks)
         groups = []
         for _, row in self.contacts.iterrows():
             split_label = list(row.label)
-            dig_idx = [i for i, c in enumerate(split_label) if c.isdigit()]     # indicies of digits in label
+            #dig_idx = [i for i, c in enumerate(split_label) if c.isdigit()]     # indicies of digits in label
             alpha_idx = [i for i, c in enumerate(split_label) if c.isalpha()]   # indices of alphabetical characters in label
             groups.append(row.label[:alpha_idx[-1]+1])                          # select values before final digits
         electrodes['group'] = groups
         #electrodes['group'] = [re.sub('\d+', '', x) for x in self.contacts.label]
+        
         if self.area:       # use area data if available
             electrodes['size'] = [self.area_map.get(x) if x in self.area_map.keys() else -999 for x in electrodes.group]
         else:
             electrodes['size'] = -999
+        
         electrodes['hemisphere'] = ['L' if x < 0 else 'R' if x > 0 else 'n/a' for x in electrodes.x]        # use coordinates for hemisphere
         electrodes['type'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.contacts.type]
+        
         # anatomical regions
         for br in self.BRAIN_REGIONS:
             if self.brain_regions[br] > 0:
                 electrodes[br] = self.contacts[br]
+        
+        # both MNI and Talairach --> default to MNI first, manually define Tal
+        if toggle:
+            electrodes['tal.x'] = self.contacts['tal.x']
+            electrodes['tal.y'] = self.contacts['tal.y']
+            electrodes['tal.z'] = self.contacts['tal.z']
+        
         electrodes = electrodes.fillna('n/a')                                   # remove NaN
         electrodes = electrodes.replace('', 'n/a')                              # resolve empty cell issue
-        electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type']]          # re-order columns
+        
+        if toggle:
+            electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemipshere', 'type',
+                                     'tal.x', 'tal.y', 'tal.z']]
+        else:
+            electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type']]          # re-order columns
         return electrodes
     
     # create sidecar json for electrodes.tsv
-    def make_electrodes_sidecar(self):
+    def make_electrodes_sidecar(self, atlas, toggle):
         sidecar = {'name': 'Label of electrode.'}
-        sidecar['x'] = 'x-axis position'
-        sidecar['y'] = 'y-axis position'
-        sidecar['z'] = 'z-axis position'
+
+        # coordinate system
+        if atlas == 'mni':
+            sidecar['x'] = 'x-axis position in MNI coordinates'
+            sidecar['y'] = 'y-axis position in MNI coordinates'
+            sidecar['z'] = 'z-axis position in MNI coordinates'
+        elif atlas == 'tal':
+            sidecar['x'] = 'x-axis position in Talairach coordinates'
+            sidecar['y'] = 'y-axis position in Talairach coordinates'
+            sidecar['z'] = 'z-axis position in Talairach coordinates'
+
         sidecar['size'] = 'Surface area of electrode.'
         sidecar['group'] = 'Group of channels electrode belongs to (same shank).'
         sidecar['hemisphere'] = 'Hemisphere of electrode location.'
         sidecar['type'] = 'Type of electrode.'
+
+        # brain regions
         if self.brain_regions['wb.region'] > 0:
             sidecar['wb.region'] = 'Brain region of electrode location from subcortical neuroradiology pipeline.'
         if self.brain_regions['ind.region'] > 0:
@@ -124,13 +155,24 @@ class intracranial_BIDS_converter:
         if self.brain_regions['das.region'] > 0:
             sidecar['das.region'] = 'Brain region of electrode location from hand annotations by neuroradiologist.  Usually in MTL.'
         if self.brain_regions['stein.region'] > 0:
-            sidecar['stein.region'] = 'Brain region of electrode location from hand annotations by neurologist.  Usuall in MTL.'
+            sidecar['stein.region'] = 'Brain region of electrode location from hand annotations by neurologist.  Usually in MTL.'
+
+        # both MNI and Talairach
+        if toggle:
+            sidecar['tal.x'] = 'x-axis position in Talairach coordinates'
+            sidecar['tal.y'] = 'x-axis position in Talairach coordinates'
+            sidecar['tal.z'] = 'z-axis position in Talairach coordinates'
+
         return sidecar
 
-    def write_BIDS_electrodes(self, atlas):
+    def write_BIDS_electrodes(self, atlas, toggle):
         bids_path = self._BIDS_path().update(suffix='electrodes', extension='.tsv', datatype='ieeg')
         # COULD DO AWAY WITH SEPARATE tal AND mni ATTRIBUTES
-        if atlas == 'tal':
+        if toggle:
+            bids_path.update(space='MNI152NLin6ASym')
+            os.makedirs(bids_path.directory, exist_ok=True)
+            self._to_tsv(self.electrodes, bids_path.fpath)
+        elif atlas == 'tal':
             bids_path.update(space='Talairach')
             os.makedirs(bids_path.directory, exist_ok=True)
             self._to_tsv(self.electrodes_tal, bids_path.fpath)
@@ -143,15 +185,18 @@ class intracranial_BIDS_converter:
         with open(bids_path.update(extension='.json').fpath, 'w') as f:
             json.dump(fp=f, obj=self.electrodes_sidecar)
 
-    def _coordinate_system(self, atlas):
-        if atlas == 'tal':
+    def _coordinate_system(self, atlas, toggle):
+        if toggle:
+            return {'iEEGCoordinateSystem': 'MNI152NLin6ASym', 'iEEGCoordinateUnits': 'mm',
+                    'iEEGCoordinateSystem_': 'Talairach', 'iEEGCoordinateUnits_': 'mm'}
+        elif atlas == 'tal':
             return {'iEEGCoordinateSystem': 'Talairach', 'iEEGCoordinateUnits': 'mm'}
         elif atlas == 'mni':
             return {'iEEGCoordinateSystem': 'MNI152NLin6ASym', 'iEEGCoordinateUnits': 'mm'}
         
-    def write_BIDS_coords(self, atlas):
+    def write_BIDS_coords(self, atlas, toggle):
         bids_path = self._BIDS_path().update(suffix='coordsystem', extension='.json', datatype='ieeg')
-        coord_sys = self._coordinate_system(self, atlas)
+        coord_sys = self._coordinate_system(self, atlas, toggle)
         if atlas == 'tal':
             bids_path.update(space='Talairach')
         elif atlas == 'mni':
@@ -291,15 +336,23 @@ class intracranial_BIDS_converter:
 
         # ---------- Electrodes ----------
         self.contacts = self.load_contacts()
-        self.electrodes_sidecar = self.make_electrodes_sidecar()
-        if self.mni:
-            self.electrodes_mni = self.contacts_to_electrodes('mni')
-            self.write_BIDS_electrodes('mni')
-            self.write_BIDS_coords('mni')
-        if self.tal:
-            self.electrodes_tal = self.contacts_to_electrodes('tal')
-            self.write_BIDS_electrodes('tal')
-            self.write_BIDS_coords('tal')
+
+        # both MNI and Talairach
+        if self.mni and self.tal:
+            self.electrodes = self.contacts_to_electrodes('mni', True)
+            self.electrodes_sidecar = self.make_electrodes_sidecar('mni', True)
+            self.write_BIDS_electrodes('mni', True)
+            self.write_BIDS_coords('mni', True)
+        elif self.mni:
+            self.electrodes_mni = self.contacts_to_electrodes('mni', False)
+            self.electrodes_sidecar = self.make_electrodes_sidecar('mni', False)
+            self.write_BIDS_electrodes('mni', False)
+            self.write_BIDS_coords('mni', False)
+        elif self.tal:
+            self.electrodes_tal = self.contacts_to_electrodes('tal', False)
+            self.electrodes_sidecar = self.make_electrodes_sidecar('tal', False)
+            self.write_BIDS_electrodes('tal', False)
+            self.write_BIDS_coords('tal', False)
 
         # ---------- Channels ----------
         self.pairs = self.load_pairs()
