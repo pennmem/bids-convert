@@ -143,7 +143,7 @@ class PAL1_BIDS_converter(intracranial_BIDS_converter):
     # ---------- EEG ----------
     def eeg_sidecar(self, ref):
         sidecar = super().eeg_sidecar(ref)
-        sidecar = pd.DataFrame(sidecar = [0])
+        sidecar = pd.DataFrame(sidecar, index=[0])
         sidecar.insert(1, 'TaskDescription', 'cued recall of paired associates')
         sidecar = sidecar.to_dict(orient='records')[0]
         return sidecar
