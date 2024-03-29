@@ -329,6 +329,7 @@ class intracranial_BIDS_converter:
         self.reader = self.cml_reader()
         self.wordpool_file = self.set_wordpool()
         self.events = self.events_to_BIDS()
+        self.events_descriptor = self.make_events_descriptor()
         self.write_BIDS_beh()
 
         # ---------- EEG ----------
