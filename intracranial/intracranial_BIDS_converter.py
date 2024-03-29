@@ -31,7 +31,7 @@ class intracranial_BIDS_converter:
     # ---------- BIDS Utility ----------
     # return a base BIDS_path object to update
     def _BIDS_path(self):
-        bids_path = mne_bids.BIDS_path(subject=self.subject, task=self.experiment, session=str(self.session),
+        bids_path = mne_bids.BIDSPath(subject=self.subject, task=self.experiment, session=str(self.session),
                                         root=self.root)
         return bids_path
 
