@@ -13,7 +13,7 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
     wordpool_categorized_SP = np.loadtxt('wordpools/wordpool_categorized_SP.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS_storage/catFR1/'):
+    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/catFR1/'):
         super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
 
     # ---------- Events ----------
