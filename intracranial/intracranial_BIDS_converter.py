@@ -122,7 +122,7 @@ class intracranial_BIDS_converter:
         electrodes = electrodes.replace('', 'n/a')                              # resolve empty cell issue
         
         if toggle:
-            electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemipshere', 'type',
+            electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type',
                                      'tal.x', 'tal.y', 'tal.z']]
         else:
             electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type']]          # re-order columns
