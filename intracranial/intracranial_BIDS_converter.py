@@ -79,9 +79,11 @@ class intracranial_BIDS_converter:
         area_path = f'/data10/RAM/subjects/{self.subject}/docs/area.txt'
         try:
             area = np.loadtxt(area_path, dtype=str)
-            self.area_map = dict(zip(area[:, 0], area[:, 1].astype(float)))
+            area_map = dict(zip(area[:, 0], area[:, 1].astype(float)))
         except BaseException:
-            self.area_map = {}
+            area_map = {}
+
+        return area_map
     
     # convert CML contacts to BIDS electrodes
     def contacts_to_electrodes(self, atlas, toggle):
