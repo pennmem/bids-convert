@@ -14,7 +14,7 @@ class intracranial_BIDS_converter:
     BRAIN_REGIONS = ['wb.region', 'ind.region', 'das.region', 'stein.region']
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS_storage/'):
+    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/'):
         self.subject = subject
         self.experiment = experiment
         self.session = session
