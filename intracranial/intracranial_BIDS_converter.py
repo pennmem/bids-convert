@@ -25,6 +25,8 @@ class intracranial_BIDS_converter:
         self.mni = mni
         self.tal = tal
         self.area = area
+        if self.area:
+            self.area_map = self.generate_area_map()
         self.brain_regions = brain_regions   # dictionary mapping target regions to number of non-NaN contacts
         self.root = root
 
