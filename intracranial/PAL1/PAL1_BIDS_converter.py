@@ -39,10 +39,14 @@ class PAL1_BIDS_converter(intracranial_BIDS_converter):
         
         events = events.fillna('n/a')                    # change NaN to 'n/a'
         events = events.replace('', 'n/a')               # no empty cells
-        
+        """
         events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 
                          'serialpos', 'probepos', 'probe_word', 'resp_word', 'study_1', 'study_2', 
                          'list', 'test', 'answer', 'experiment', 'session', 'subject']]         # re-order columns
+        """
+        events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 
+                         'serialpos', 'probepos', 'probe_word', 'resp_word', 'study_1', 'study_2', 
+                         'list', 'experiment', 'session', 'subject']]         # re-order columns
         return events
     
     def make_events_descriptor(self):
