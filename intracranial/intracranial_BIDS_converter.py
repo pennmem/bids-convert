@@ -336,6 +336,10 @@ class intracranial_BIDS_converter:
         self.events_descriptor = self.make_events_descriptor()
         self.write_BIDS_beh()
 
+        # terminate if no monopolar or bipolar EEG
+        if not self.monopolar and not self.bipolar:
+            return True
+
         # ---------- EEG ----------
         self.sfreq, self.recording_duration = self.eeg_metadata()
 
@@ -377,3 +381,5 @@ class intracranial_BIDS_converter:
             self.eeg_mono = self.eeg_mono_to_BIDS()
             self.write_BIDS_ieeg('monopolar')
             self.write_BIDS_channels('monopolar')        # write monopolar channels to BIDS format (overwrite automatic)
+
+        return True
