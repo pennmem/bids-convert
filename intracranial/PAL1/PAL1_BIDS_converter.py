@@ -33,7 +33,7 @@ class PAL1_BIDS_converter(intracranial_BIDS_converter):
         events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0   # event duration [s] --> lots of superfluous events may mess this up
         events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)             # replace events with negative duration with 0.0s
         events['response_time'] = 'n/a'                                                         # response time [s]
-        events.loc[events.trial_type=='PROB', 'response_time'] = events['rectime']              # math events use rectime
+        #events.loc[events.trial_type=='PROB', 'response_time'] = events['rectime']              # math events use rectime
         events.loc[events.trial_type=='REC_EVENT', 'response_time'] = events['RT']              # recall events use RT
         # stim_file, serialpos, probepos, 
         

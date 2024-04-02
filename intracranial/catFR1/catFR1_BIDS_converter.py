@@ -33,8 +33,8 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
     
     def events_to_BIDS(self):
         events = self.reader.load('events')
-        events = cml.correct_retrieval_offsets(events, self.reader)        ## apply offset corrections
-        # apply countdown lst corrrections
+        events = cml.correct_retrieval_offsets(events, self.reader)        # apply offset corrections
+        events = cml.correct_countdown_lists(events, self.reader)          # apply countdown list corrections
         events = events.rename(columns={'eegoffset':'sample', 'type': 'trial_type'})               # rename columns
         events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                         # onset from first event [ms]
         events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0      # event duration [ms]
