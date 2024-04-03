@@ -200,9 +200,9 @@ class intracranial_BIDS_converter:
         elif atlas == 'mni':
             return {'iEEGCoordinateSystem': 'MNI152NLin6ASym', 'iEEGCoordinateUnits': 'mm'}
         
-    def write_BIDS_coords(self, atlas, toggle):
+    def write_BIDS_coords(self, atlas):
         bids_path = self._BIDS_path().update(suffix='coordsystem', extension='.json', datatype='ieeg')
-        coord_sys = self._coordinate_system(atlas, toggle)
+        coord_sys = self._coordinate_system(atlas)
         if atlas == 'tal':
             bids_path.update(space='Talairach')
         elif atlas == 'mni':
