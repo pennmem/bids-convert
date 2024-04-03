@@ -24,7 +24,6 @@ class FR1_BIDS_converter(intracranial_BIDS_converter):
         evs = self.reader.load('events')
         evs = cml.correct_retrieval_offsets(evs, self.reader)            # apply offset corrections
         evs = cml.correct_countdown_lists(evs, self.reader)              # apply countdown list corrections
-        # apply countdown list corrections
         word_evs = evs[evs['type']=='WORD']; word_evs[word_evs['list']!=-1]    # remover practice list
         if np.all([1 if x in self.wordpool_EN else 0 for x in word_evs.item_name]):
             wordpool_file = 'wordpools/wordpool_EN.txt'

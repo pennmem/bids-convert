@@ -189,11 +189,13 @@ class intracranial_BIDS_converter:
         with open(bids_path.update(extension='.json').fpath, 'w') as f:
             json.dump(fp=f, obj=self.electrodes_sidecar)
 
-    def _coordinate_system(self, atlas, toggle):
+    def _coordinate_system(self, atlas):
+        """ not allowed to add fields
         if toggle:
             return {'iEEGCoordinateSystem': 'MNI152NLin6ASym', 'iEEGCoordinateUnits': 'mm',
                     'iEEGCoordinateSystem_': 'Talairach', 'iEEGCoordinateUnits_': 'mm'}
-        elif atlas == 'tal':
+        """
+        if atlas == 'tal':
             return {'iEEGCoordinateSystem': 'Talairach', 'iEEGCoordinateUnits': 'mm'}
         elif atlas == 'mni':
             return {'iEEGCoordinateSystem': 'MNI152NLin6ASym', 'iEEGCoordinateUnits': 'mm'}
@@ -351,17 +353,17 @@ class intracranial_BIDS_converter:
             self.electrodes = self.contacts_to_electrodes('mni', True)
             self.electrodes_sidecar = self.make_electrodes_sidecar('mni', True)
             self.write_BIDS_electrodes('mni', True)
-            self.write_BIDS_coords('mni', True)
+            self.write_BIDS_coords('mni')
         elif self.mni:
             self.electrodes_mni = self.contacts_to_electrodes('mni', False)
             self.electrodes_sidecar = self.make_electrodes_sidecar('mni', False)
             self.write_BIDS_electrodes('mni', False)
-            self.write_BIDS_coords('mni', False)
+            self.write_BIDS_coords('mni')
         elif self.tal:
             self.electrodes_tal = self.contacts_to_electrodes('tal', False)
             self.electrodes_sidecar = self.make_electrodes_sidecar('tal', False)
             self.write_BIDS_electrodes('tal', False)
-            self.write_BIDS_coords('tal', False)
+            self.write_BIDS_coords('tal')
 
         # ---------- Channels ----------
         self.pairs = self.load_pairs()
