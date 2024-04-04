@@ -29,7 +29,7 @@ class FR1_BIDS_converter(intracranial_BIDS_converter):
             wordpool_file = 'wordpools/wordpool_EN.txt'
         elif np.all([1 if x in self.wordpool_short_EN else 0 for x in word_evs.item_name]):
             wordpool_file = 'wordpools/wordpool_short_EN.txt'
-        elif np.all([1 if x in self.wordpool_long_EN.txt else 0 for x in word_evs.item_name]):
+        elif np.all([1 if x in self.wordpool_long_EN else 0 for x in word_evs.item_name]):
             wordpool_file = 'wordpools/wordpool_long_EN.txt'
         elif np.all([1 if x in self.wordpool_SP else 0 for x in word_evs.item_name]):
             wordpool_file = 'wordpools/wordpool_SP.txt'
