@@ -14,8 +14,9 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
 
     # initialize
     # just hand empty dictionary for brain_regions
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS_storage/pyFR/'):
+    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, montage, root='/scratch/hherrema/BIDS_storage/pyFR/'):
         super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+        self.montage = montage
 
     # ---------- Events ----------
     def set_wordpool(self):

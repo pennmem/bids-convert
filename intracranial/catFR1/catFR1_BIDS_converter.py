@@ -46,8 +46,12 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
         events.loc[events.answer==-999, 'answer'] = 'n/a'                                          # non-math events no answer
         events['item_name'] = events.item_name.replace('X', 'n/a')
         events['category'] = events.category.replace('X', 'n/a')
+        """
         events = events.drop(columns=['is_stim', 'stim_list', 'stim_params', 'mstime', 'protocol', 'item_num', 'iscorrect', 'eegfile', 'exp_version', 
                                       'montage', 'msoffset', 'category_num'])                      # drop unneeded fields
+        """
+        events = events.drop(columns=['is_stim', 'stim_list', 'mstime', 'protocol', 'item_num', 'iscorrect', 'eegfile', 'exp_version', 
+                                      'montage', 'msoffset', 'category_num'])                      # drop unneeded fields (system 4)
         events = events.drop(columns=['intrusion', 'recalled'])
         events = events.fillna('n/a')                                                              # change NaN to 'n/a'
         events = events.replace('', 'n/a')                                                         # no empty cells
@@ -65,6 +69,7 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
             "REC_END": "Recall phase ends.",
             "REC_WORD": "Recalled word, onset of speech (during free recall).",
             "REC_WORD_VV": "Vocalization (during free recall).",
+            'COUNTDOWN': 'Beginning of pre-list presentation countdown.',
             'COUNTDOWN_START': 'Beginning of pre-list presentation countdown.',
             'COUNTDOWN_END': 'End of pre-list presentation countdown.', 
             'DISTRACT_START': 'Beginning of math distractor phase.', 
