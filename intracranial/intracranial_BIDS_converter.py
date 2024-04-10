@@ -112,9 +112,11 @@ class intracranial_BIDS_converter:
         electrodes['type'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.contacts.type]
         
         # anatomical regions
+        br_cols = []
         for br in self.BRAIN_REGIONS:
             if self.brain_regions[br] > 0:
                 electrodes[br] = self.contacts[br]
+                br_cols.append(br)
         
         # both MNI and Talairach --> default to MNI first, manually define Tal
         if toggle:
@@ -127,9 +129,9 @@ class intracranial_BIDS_converter:
         
         if toggle:
             electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type',
-                                     'tal.x', 'tal.y', 'tal.z']]
+                                     'tal.x', 'tal.y', 'tal.z'] + br_cols]
         else:
-            electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type']]          # re-order columns
+            electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type'] + br_cols]          # re-order columns
         return electrodes
     
     # create sidecar json for electrodes.tsv
