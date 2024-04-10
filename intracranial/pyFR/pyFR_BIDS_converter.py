@@ -118,11 +118,11 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
                 mni_coords = np.loadtxt(f'/data/eeg/{self.subject}_{self.montage}/tal/RAW_coords.txt.mni')
             else:
                 mni_coords = np.loadtxt(f'/data/eeg/{self.subject}/tal/RAW_coords.txt.mni')
-            contacts_maks = []
+            contacts_mask = []
             for i, c in enumerate(mni_coords[:,0]):
                 if int(c) in np.array(self.contacts.contact):
-                    contacts_maks.append(i)
-            mni_contacts = mni_coords[contacts_maks, :]
+                    contacts_mask.append(i)
+            mni_contacts = mni_coords[contacts_mask, :]
             electrodes['x'] = mni_contacts[:,1]
             electrodes['y'] = mni_contacts[:,2]
             electrodes['z'] = mni_contacts[:,3]
