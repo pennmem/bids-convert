@@ -100,6 +100,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         new_session = self.reassign_session()
         if new_session:
             events['session'] = new_session
+            events['subject'] = self.subject   # remove _montage from subject
         
         if self.math_events:
             events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 
@@ -156,7 +157,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     
     # ---------- Electrodes ----------
     def load_contacts(self):
-        contacts = self.reader.load('events')
+        contacts = self.reader.load('contacts')
         contacts['type'] = [x if type(x)==str else 'n/a' for x in contacts.type]      # replace missing types with 'n/a'
         return contacts
     
