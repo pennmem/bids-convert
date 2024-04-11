@@ -293,6 +293,13 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         return channels
     
     # ---------- EEG ----------
+    # set sfreq and recording_duration attributes
+    def eeg_metadata(self):
+        eeg = self.reader.load_eeg(scheme=self.contacts)
+        sfreq = eeg.samplerate
+        recording_duration = eeg.data.shape[-1] / sfreq
+        return sfreq, recording_duration
+    
     def eeg_sidecar(self, ref):                 # overwrite for different 'type' field
         sidecar = {'TaskName': self.experiment}
         sidecar['TaskDescription'] = 'delayed free recall of word lists'
@@ -330,12 +337,12 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         # terminate if no monopolar or bipolar EEG
         if not self.monopolar and not self.bipolar:
             return True
-        
-        # ---------- EEG ----------
-        self.sfreq, self.recording_duration = self.eeg_metadata()
 
         # ---------- Electrodes ----------
         self.contacts = self.load_contacts()
+
+        # ---------- EEG ----------
+        self.sfreq, self.recording_duration = self.eeg_metadata()
 
         # both Talairach and MNI coordinates (default to Tal)
         if self.tal and self.mni:
