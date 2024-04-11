@@ -14,12 +14,12 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
 
     # initialize
     # just hand empty dictionary for brain_regions
-    def __init__(self, subject, experiment, session, montage, math_evs, system_version, unit_scale, monopolar, bipolar, mni, tal, root='/scratch/hherrema/BIDS/pyFR/'):
+    def __init__(self, subject, experiment, session, montage, math_events, system_version, unit_scale, monopolar, bipolar, mni, tal, root='/scratch/hherrema/BIDS/pyFR/'):
         self.subject = subject
         self.experiment = experiment
         self.session = session
         self.montage = montage
-        self.math_evs = math_evs
+        self.math_events = math_events
         self.system_version = system_version
         self.unit_scale = unit_scale
         self.monopolar = monopolar
@@ -56,7 +56,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     def events_to_BIDS(self):
         evs = self.reader.load('events')
         # load in math events
-        if self.math_evs:
+        if self.math_events:
             if self.montage != 0:
                 math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{self.subject}_{self.montage}_math.mat', squeeze_me=True)['events'])
             else:
@@ -87,7 +87,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         if len(ri) == 1:
             events['session'] = ri.iloc[0].new_session
         
-        if self.math_evs:
+        if self.math_events:
             events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 
                             'stim_file', 'item_name', 'serialpos', 'list', 'test', 'answer', 
                             'experiment', 'session', 'subject']]                                        # re-order columns + drop unneeded fields
