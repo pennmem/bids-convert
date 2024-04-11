@@ -22,9 +22,7 @@ class FR1_BIDS_converter(intracranial_BIDS_converter):
     # ---------- Events ----------
     def set_wordpool(self):
         evs = self.reader.load('events')
-        evs = cml.correct_retrieval_offsets(evs, self.reader)            # apply offset corrections
-        evs = cml.correct_countdown_lists(evs, self.reader)              # apply countdown list corrections
-        word_evs = evs[evs['type']=='WORD']; word_evs[word_evs['list']!=-1]    # remover practice list
+        word_evs = evs[evs['type']=='WORD']; word_evs = word_evs[word_evs['list']!=-1]    # remover practice list
         if np.all([1 if x in self.wordpool_EN else 0 for x in word_evs.item_name]):
             wordpool_file = 'wordpools/wordpool_EN.txt'
         elif np.all([1 if x in self.wordpool_short_EN else 0 for x in word_evs.item_name]):
@@ -42,6 +40,8 @@ class FR1_BIDS_converter(intracranial_BIDS_converter):
     
     def events_to_BIDS(self):                   # can load events for all 589 FR1 sessions
         events = self.reader.load('events')
+        events = cml.correct_retrieval_offsets(events, self.reader)            # apply offset corrections
+        events = cml.correct_countdown_lists(events, self.reader)              # apply countdown list corrections
         events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type'})     # rename columns
         events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0        # onset from first event [ms]
         events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0   # event duration [ms]

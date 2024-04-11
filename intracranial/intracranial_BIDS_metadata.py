@@ -13,7 +13,7 @@ from tqdm import tqdm
 import math
 import string
 
-# class to use when doing metadata checks before converter experiment to BIDS format
+# class to use when doing metadata checks before converting experiment to BIDS format
 class intracranial_BIDS_metadata:
     BRAIN_REGIONS = ['wb.region', 'ind.region', 'das.region', 'stein.region']
 
