@@ -28,12 +28,18 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         self.tal = tal
         self.root = root
 
+    # ---------- BIDS Utility ---------
+    # return a base BIDS_path object to update
+    def _BIDS_path(self):
         # update session if re-implant
         new_session = self.reassign_session()
         if new_session:
-            self.session = new_session
-
-    # ---------- BIDS Utility ---------
+            bids_path = mne_bids.BIDSPath(subject=self.subject, task=self.experiment, session=str(new_session),
+                                            root=self.root)
+        else:
+            bids_path = mne_bids.BIDSPath(subject=self.subject, task=self.experiment, session=str(self.session),
+                                            root=self.root)
+        return bids_path
     # instantiate CMLRead object, save as attribute
     def cml_reader(self):
         df = cml.get_data_index()
@@ -41,8 +47,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         reader = cml.CMLReader(subject=sel.subject, experiment=sel.experiment, session=sel.session, 
                                localization=sel.localization, montage=sel.montage)
         return reader
-
-    # ---------- Events ----------
+    
     def reassign_session(self):
         re_implants = pd.read_csv('pyFR/metadata/re_implants.csv')
         ri = re_implants[(re_implants.subject == self.subject) & (re_implants.montage == self.montage) &
@@ -51,7 +56,8 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
             return ri.iloc[0].new_session
         else:
             return None
-
+        
+    # ---------- Events ----------
     def set_wordpool(self):
         evs = self.reader.load('events')
         word_evs = evs[evs['type']=='WORD']
@@ -91,11 +97,9 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         events = events.replace('', 'n/a')                                                           # no empty cells
 
         # update session if re-implant
-        re_implants = pd.read_csv('pyFR/metadata/re_implants.csv')
-        ri = re_implants[(re_implants.subject == self.subject) & (re_implants.montage == self.montage) &
-                         (re_implants.session == self.session)]
-        if len(ri) == 1:
-            events['session'] = ri.iloc[0].new_session
+        new_session = self.reassign_session()
+        if new_session:
+            events['session'] = new_session
         
         if self.math_events:
             events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 
@@ -295,7 +299,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     # ---------- EEG ----------
     # set sfreq and recording_duration attributes
     def eeg_metadata(self):
-        eeg = self.reader.load_eeg(scheme=self.contacts)
+        eeg = self.reader.load_eeg()
         sfreq = eeg.samplerate
         recording_duration = eeg.data.shape[-1] / sfreq
         return sfreq, recording_duration
@@ -338,11 +342,11 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         if not self.monopolar and not self.bipolar:
             return True
 
-        # ---------- Electrodes ----------
-        self.contacts = self.load_contacts()
-
         # ---------- EEG ----------
         self.sfreq, self.recording_duration = self.eeg_metadata()
+
+        # ---------- Electrodes ----------
+        self.contacts = self.load_contacts()
 
         # both Talairach and MNI coordinates (default to Tal)
         if self.tal and self.mni:
