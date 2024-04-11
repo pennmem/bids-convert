@@ -48,7 +48,7 @@ class FR1_BIDS_converter(intracranial_BIDS_converter):
         events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)             # replace events with negative duration with 0.0 s
         events['response_time'] = 'n/a'                                                            # response time [ms]
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV') | 
-                   (events.trial_type=='PROB'), 'response_time'] = events['duration']           # slightly superfluous
+                   (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0      # use rectime
         events['stim_file'] = np.where((events.trial_type=='WORD') & (events.list!=-1), self.wordpool_file, 'n/a')    # add wordpool to word events
         events.loc[events.answer==-999, 'answer'] = 'n/a'                                       # non-math events no answer
         events['item_name'] = events.item_name.replace('X', 'n/a')                              

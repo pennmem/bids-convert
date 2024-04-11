@@ -231,7 +231,9 @@ class intracranial_BIDS_metadata:
         else:
             # read in from csv
             sys1_units = pd.read_csv('system_1_unit_conversions.csv')
-            return sys1_units[sys1_units.subject == row.subject].iloc[0]['conversion_to_V']
+            return sys1_units[(sys1_units.subject == row.subject) &
+                              (sys1_units.experiment == row.experiment) & 
+                              (sys1_units.session == row.session)].iloc[0]['conversion_to_V']
     
     def _area_data(self, row):
         area_path = f'/data10/RAM/subjects/{row.subject}/docs/area.txt'
