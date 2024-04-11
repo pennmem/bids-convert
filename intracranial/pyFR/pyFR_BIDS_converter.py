@@ -63,7 +63,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
     
     def events_to_BIDS(self):
-        evs = self.reader.load('events')
+        events = self.reader.load('events')
         # load in math events
         if self.math_events:
             if self.montage != 0:
@@ -73,8 +73,9 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
             math_evs = math_evs[math_evs.session == self.session]                                        # select out session
             math_evs = math_evs[(math_evs.type != 'B') & (math_evs.type != 'E')]                         # remove the B and E events from math evs
             math_evs['list'] = math_evs['list'] - 1                                                      # math events given list + 1
-            events = pd.concat([math_evs, evs], ignore_index=True)
+            events = pd.concat([math_evs, events], ignore_index=True)
             events = events.sort_values(by='mstime', ascending=True, ignore_index=True)                  # sort in chronological order
+        
         events['experiment'] = self.experiment                                                       # math events don't have experiment field
         # transformations
         events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type'})                  # rename columns
