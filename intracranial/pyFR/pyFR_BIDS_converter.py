@@ -322,6 +322,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         # ---------- Events ----------
         self.reader = self.cml_reader()
         self.wordpool_file = self.set_wordpool()
+        self.events = self.events_to_BIDS()
         self.events_descriptor = self.make_events_descriptor()
         self.write_BIDS_beh()
 
