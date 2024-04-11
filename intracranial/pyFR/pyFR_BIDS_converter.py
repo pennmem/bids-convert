@@ -33,6 +33,15 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         if new_session:
             self.session = new_session
 
+    # ---------- BIDS Utility ---------
+    # instantiate CMLRead object, save as attribute
+    def cml_reader(self):
+        df = cml.get_data_index()
+        sel = df.query("subject==@self.subject & experiment==@self.experiment & session==@self.session & montage==@self.montage").iloc[0]
+        reader = cml.CMLReader(subject=sel.subject, experiment=sel.experiment, session=sel.session, 
+                               localization=sel.localization, montage=sel.montage)
+        return reader
+
     # ---------- Events ----------
     def reassign_session(self):
         re_implants = pd.read_csv('pyFR/metadata/re_implants.csv')
