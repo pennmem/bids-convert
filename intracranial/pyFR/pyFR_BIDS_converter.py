@@ -11,6 +11,8 @@ from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
 class pyFR_BIDS_converter(intracranial_BIDS_converter):
     wordpool_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/pyFR/wordpools/wordpool_EN.txt', dtype=str)
+    CH_TYPES = {'TJ027': 'ECOG', 'TJ029': 'SEEG', 'TJ030': 'SEEG', 'TJ032': 'ECOG', 'TJ061': 'ECOG', 'TJ083':'ECOG',
+                'UP004': 'SEEG', 'UP008':'ECOG', 'UP011':'ECOG', 'UP037': 'ECOG'}
 
     # initialize
     # just hand empty dictionary for brain_regions
@@ -270,14 +272,14 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     
     def pairs_to_channels(self):
         channels = pd.DataFrame({'name': np.array(self.pairs.label)})
-        channels['type'] = [self.ELEC_TYPES_BIDS.get(x) for x in self.pairs.type]
+        channels['type'] = [self.ELEC_TYPES_BIDS.get(x.upper()) for x in self.pairs.type]
         channels['units'] = 'V'                                                    # convert EEG to V
         channels['low_cutoff'] = 'n/a'                                             # highpass filter (don't actually know this for clinical eeg)
         channels['high_cutoff'] = 'n/a'                                            # lowpass filter (mne adds Nyquist frequency = 2 x sampling rate)
         channels['reference'] = 'bipolar'
         channels['group'] = np.array(self.pairs.grpName)
         channels['sampling_frequency'] = self.sfreq
-        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.pairs.type]
+        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x.upper()) for x in self.pairs.type]
         channels['notch'] = 'n/a'
         channels = channels.fillna('n/a')                                          # remove NaN
         channels = channels.replace('', 'n/a')                                     # no empty cells
@@ -285,7 +287,8 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     
     def contacts_to_channels(self):
         channels = pd.DataFrame({'name': np.array(self.contacts.label)})
-        channels['type'] = [self.ELEC_TYPES_BIDS.get(x) for x in self.contacts.type]
+        channels['type'] = [self.ELEC_TYPES_BIDS.get(x) if type(x) == str else 
+                            self.CH_TYPES.get(self.subject) for x in self.contacts.type]
         channels['units'] = 'V'                                                    # convert EEG to V
         channels['low_cutoff'] = 'n/a'                                             # highpass filter (don't actually know this for clinical eeg)
         channels['high_cutoff'] = 'n/a'                                            # lowpass filter (mne adds Nyquist frequency = 2 x sampling rate)
@@ -328,6 +331,26 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
             sidecar['MiscChannelCount'] = len(self.contacts[self.contacts.type=='n/a'].index)
             sidecar['EEGChannelCount'] = 0
         return sidecar
+    
+    # ---------- EEG (monopolar) ----------
+    def eeg_mono_to_BIDS(self):
+        eeg = self.reader.load_eeg(scheme=self.contacts)
+        eeg.data = eeg.data / self.unit_scale              # convert to V before instantiating raw object
+        eeg_mne = eeg.to_mne()
+        mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_mono.type]))    # ecog or seeg
+        eeg_mne.set_channel_types(mapping)                                                     # set channel types
+
+        return eeg_mne
+    
+    # ---------- EEG (bipolar) ----------
+    def eeg_bi_to_BIDS(self):
+        eeg = self.reader.load_eeg(scheme=self.pairs)
+        eeg.data = eeg.data / self.unit_scale               # convert to V before instantiating raw object
+        eeg_mne = eeg.to_mne()
+        mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_bi.type]))
+        eeg_mne.set_channel_types(mapping)
+
+        return eeg_mne
     
     # ---------------------------------
     # run conversion
