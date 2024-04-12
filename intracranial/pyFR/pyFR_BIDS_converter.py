@@ -287,7 +287,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     
     def contacts_to_channels(self):
         channels = pd.DataFrame({'name': np.array(self.contacts.label)})
-        channels['type'] = [self.ELEC_TYPES_BIDS.get(x) if type(x) == str else 
+        channels['type'] = [self.ELEC_TYPES_BIDS.get(x) if x in self.ELEC_TYPES_BIDS.keys() else 
                             self.CH_TYPES.get(self.subject) for x in self.contacts.type]
         channels['units'] = 'V'                                                    # convert EEG to V
         channels['low_cutoff'] = 'n/a'                                             # highpass filter (don't actually know this for clinical eeg)
