@@ -287,14 +287,14 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     
     def contacts_to_channels(self):
         channels = pd.DataFrame({'name': np.array(self.contacts.label)})
-        channels['type'] = [self.ELEC_TYPES_BIDS.get(x) if x in self.ELEC_TYPES_BIDS.keys() else 
+        channels['type'] = [self.ELEC_TYPES_BIDS.get(x.upper()) if x.upper() in self.ELEC_TYPES_BIDS.keys() else 
                             self.CH_TYPES.get(self.subject) for x in self.contacts.type]
         channels['units'] = 'V'                                                    # convert EEG to V
         channels['low_cutoff'] = 'n/a'                                             # highpass filter (don't actually know this for clinical eeg)
         channels['high_cutoff'] = 'n/a'                                            # lowpass filter (mne adds Nyquist frequency = 2 x sampling rate)
         channels['group'] = np.array(self.contacts.grpName)
         channels['sampling_frequency'] = self.sfreq
-        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.contacts.type]
+        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x.upper()) for x in self.contacts.type]
         channels['notch'] = 'n/a'
         channels = channels.fillna('n/a')                                          # remove NaN
         channels = channels.replace('', 'n/a')                                     # no empty cells
