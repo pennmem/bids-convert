@@ -10,13 +10,55 @@ import scipy
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
 class pyFR_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('wordpools/wordpool_EN.txt', dtype=str)
+    wordpool_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/pyFR/wordpools/wordpool_EN.txt', dtype=str)
+    CH_TYPES = {'TJ027': 'ECOG', 'TJ029': 'SEEG', 'TJ030': 'SEEG', 'TJ032': 'ECOG', 'TJ061': 'ECOG', 'TJ083':'ECOG',
+                'UP004': 'SEEG', 'UP008':'ECOG', 'UP011':'ECOG', 'UP037': 'ECOG'}
 
     # initialize
     # just hand empty dictionary for brain_regions
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS_storage/pyFR/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+    def __init__(self, subject, experiment, session, montage, math_events, system_version, unit_scale, monopolar, bipolar, mni, tal, root='/scratch/hherrema/BIDS/pyFR/'):
+        self.subject = subject
+        self.experiment = experiment
+        self.session = session
+        self.montage = montage
+        self.math_events = math_events
+        self.system_version = system_version
+        self.unit_scale = unit_scale
+        self.monopolar = monopolar
+        self.bipolar = bipolar
+        self.mni = mni
+        self.tal = tal
+        self.root = root
 
+    # ---------- BIDS Utility ---------
+    # return a base BIDS_path object to update
+    def _BIDS_path(self):
+        # update session if re-implant
+        new_session = self.reassign_session()
+        if new_session:
+            bids_path = mne_bids.BIDSPath(subject=self.subject, task=self.experiment, session=str(new_session),
+                                            root=self.root)
+        else:
+            bids_path = mne_bids.BIDSPath(subject=self.subject, task=self.experiment, session=str(self.session),
+                                            root=self.root)
+        return bids_path
+    # instantiate CMLRead object, save as attribute
+    def cml_reader(self):
+        df = cml.get_data_index()
+        sel = df.query("subject==@self.subject & experiment==@self.experiment & session==@self.session & montage==@self.montage").iloc[0]
+        reader = cml.CMLReader(subject=sel.subject, experiment=sel.experiment, session=sel.session, 
+                               localization=sel.localization, montage=sel.montage)
+        return reader
+    
+    def reassign_session(self):
+        re_implants = pd.read_csv('pyFR/metadata/re_implants.csv')
+        ri = re_implants[(re_implants.subject == self.subject) & (re_implants.montage == self.montage) &
+                         (re_implants.session == self.session)]
+        if len(ri) == 1:
+            return ri.iloc[0].new_session
+        else:
+            return None
+        
     # ---------- Events ----------
     def set_wordpool(self):
         evs = self.reader.load('events')
@@ -29,33 +71,66 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
     
     def events_to_BIDS(self):
-        evs = self.reader.load('events')
+        events = self.reader.load('events')
         # load in math events
-        if self.montage == 0:
-            math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{self.subject}_math.mat', squeeze_me=True)['events'])
-        else:
-            math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{self.subject}_{self.montage}_math.mat', squeeze_me=True)['events'])
-        math_evs = math_evs[math_evs.session == self.session]                                        # select out session
-        math_evs = math_evs[(math_evs.type != 'B') & (math_evs.type != 'E')]                         # remove the B and E events from math evs
-        math_evs['list'] = math_evs['list'] - 1                                                      # math events given list + 1
-        events = pd.concat([math_evs, evs], ignore_index=True)
-        events = events.sort_values(by='mstime', ascending=True, ignore_index=True)                  # sort in chronological order
+        if self.math_events:
+            if self.montage != 0:
+                math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{self.subject}_{self.montage}_math.mat', squeeze_me=True)['events'])
+            else:
+                math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{self.subject}_math.mat', squeeze_me=True)['events'])
+            math_evs = math_evs[math_evs.session == self.session]                                        # select out session
+            math_evs = math_evs[(math_evs.type != 'B') & (math_evs.type != 'E')]                         # remove the B and E events from math evs
+            math_evs['list'] = math_evs['list'] - 1                                                      # math events given list + 1
+            events = pd.concat([math_evs, events], ignore_index=True)
+            events = events.sort_values(by='mstime', ascending=True, ignore_index=True)                  # sort in chronological order
+        
         events['experiment'] = self.experiment                                                       # math events don't have experiment field
         # transformations
         events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type'})                  # rename columns
-        events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0        # event duration [ms]
+        events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0        # event duration [s]
         events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)                  # replace events with negative duration with 0.0 s
-        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                           # onset from first event [ms]
-        events['response_time'] = 'n/a'                                                              # response time [ms]
-        events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV'), 
-                   'response_time'] = events['duration']
+        events = self.apply_event_durations(events)                                                  # apply well-defined durations [s]
+        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                           # onset from first event [s]
+        events['response_time'] = 'n/a'                                                              # response time [s]
+        events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV') |
+                   (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0
         events['stim_file'] = np.where(events.trial_type=='WORD', self.wordpool_file, 'n/a')              # add wordpool to word events
         events['item_name'] = events.item.replace('X', 'n/a')
         events = events.fillna('n/a')                                                                # chnage NaN to 'n/a'
         events = events.replace('', 'n/a')                                                           # no empty cells
-        events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 
-                         'stim_file', 'item_name', 'serialpos', 'list', 'test', 'answer', 
-                         'experiment', 'session', 'subject']]                                        # re-order columns + drop unneeded fields
+
+        # update session if re-implant
+        new_session = self.reassign_session()
+        if new_session:
+            events['session'] = new_session
+            events['subject'] = self.subject   # remove _montage from subject
+        
+        if self.math_events:
+            events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 
+                            'stim_file', 'item_name', 'serialpos', 'list', 'test', 'answer', 
+                            'experiment', 'session', 'subject']]                                        # re-order columns + drop unneeded fields
+        else:
+            events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time',
+                             'stim_file', 'item_name', 'serialpos', 'list',
+                             'experiment', 'session', 'subject']]
+        return events
+    
+    def apply_event_durations(self, events):
+        durations = []
+        for _, row in events.iterrows():
+            # fixation events = 1600 ms
+            if row.trial_type == 'ORIENT':
+                durations.append(1.6)
+
+            # word events = 1600 ms
+            elif row.trial_type == 'WORD':
+                durations.append(1.6)
+
+            # keep current duration
+            else:
+                durations.append(row.duration)
+
+        events['duration'] = durations        # preserves column order
         return events
     
     def make_events_descriptor(self):
@@ -103,13 +178,29 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     
     # ---------- Electrodes ----------
     def load_contacts(self):
-        contacts = self.reader.load('events')
+        contacts = self.reader.load('contacts')
         contacts['type'] = [x if type(x)==str else 'n/a' for x in contacts.type]      # replace missing types with 'n/a'
         return contacts
     
-    def contacts_to_electrodes(self, atlas):
+    def contacts_to_electrodes(self, atlas, toggle):
         electrodes = pd.DataFrame({'name': np.array(self.contacts.label)})             # name = label of contact
-        if atlas == 'tal':                                                             # tal coordinates from dataframe
+        if toggle:    # both tal and mni
+            electrodes['x'] = self.contacts['x'].astype(float)
+            electrodes['y'] = self.contacts['y'].astype(float)
+            electrodes['z'] = self.contacts['z'].astype(float)
+            if self.montage != 0:
+                mni_coords = np.loadtxt(f'/data/eeg/{self.subject}_{self.montage}/tal/RAW_coords.txt.mni')
+            else:
+                mni_coords = np.loadtxt(f'/data/eeg/{self.subject}/tal/RAW_coords.txt.mni')
+            contacts_mask = []
+            for i, c in enumerate(mni_coords[:,0]):
+                if int(c) in np.array(self.contacts.contact):
+                    contacts_mask.append(i)
+            mni_contacts = mni_coords[contacts_mask, :]
+            electrodes['mni.x'] = mni_contacts[:,1]
+            electrodes['mni.y'] = mni_contacts[:, 2]
+            electrodes['mni.z'] = mni_contacts[:, 3]
+        elif atlas == 'tal':                                                           # tal coordinates from dataframe
             electrodes['x'] = self.contacts['x'].astype(float)
             electrodes['y'] = self.contacts['y'].astype(float)
             electrodes['z'] = self.contacts['z'].astype(float)
@@ -118,14 +209,15 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
                 mni_coords = np.loadtxt(f'/data/eeg/{self.subject}_{self.montage}/tal/RAW_coords.txt.mni')
             else:
                 mni_coords = np.loadtxt(f'/data/eeg/{self.subject}/tal/RAW_coords.txt.mni')
-            contacts_maks = []
+            contacts_mask = []
             for i, c in enumerate(mni_coords[:,0]):
                 if int(c) in np.array(self.contacts.contact):
-                    contacts_maks.append(i)
-            mni_contacts = mni_coords[contacts_maks, :]
+                    contacts_mask.append(i)
+            mni_contacts = mni_coords[contacts_mask, :]
             electrodes['x'] = mni_contacts[:,1]
             electrodes['y'] = mni_contacts[:,2]
             electrodes['z'] = mni_contacts[:,3]
+
         electrodes['size'] = -999
         electrodes['group'] = np.array(self.contacts.grpName)
         electrodes['hemisphere'] = ['L' if 'Left' in x else 'R' if 'Right' in x else 'n/a' for x in self.contacts.Loc1]
@@ -136,15 +228,24 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         electrodes['gray_white'] = np.array(self.contacts.Loc4)
         electrodes = electrodes.fillna('n/a')                                          # remove NaN
         electrodes = electrodes.replace('', 'n/a')                                     # no empty cells
-        electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type', 
-                                'lobe', 'region1', 'region2', 'gray_white']]      # enforce column order
+        if toggle:
+            electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type', 
+                                     'lobe', 'region1', 'region2', 'gray_white', 'mni.x', 'mni.y', 'mni.z',]]
+        else:
+            electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type', 
+                                    'lobe', 'region1', 'region2', 'gray_white']]      # enforce column order
         return electrodes
     
-    def electrodes_sidecar(self):
+    def make_electrodes_sidecar(self, atlas, toggle):
         sidecar = {'name': 'Label of electrode'}
-        sidecar['x'] = 'x-axis position'
-        sidecar['y'] = 'y-axis position'
-        sidecar['z'] = 'z-axis position'
+        if atlas == 'tal':
+            sidecar['x'] = 'x-axis position in Talairach coordinates'
+            sidecar['y'] = 'y-axis position in Talairach coordinates'
+            sidecar['z'] = 'z-axis position in Talairach coordinates'
+        elif atlas == 'mni':
+            sidecar['x'] = 'x-axis position in MNI coordinates'
+            sidecar['y'] = 'y-axis position in MNI coordinates'
+            sidecar['z'] = 'z-axis position in MNI coordinates'
         sidecar['size'] = 'Surface area of electrode.'
         sidecar['group'] = 'Group of channels electrode belongs to (same shank).'
         sidecar['hemisphere'] = 'Hemisphere of electrode location.'
@@ -153,7 +254,34 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         sidecar['region1'] = 'Brain region of electrode location.'
         sidecar['region2'] = 'Brain region of electrode location.'
         sidecar['gray_white'] = 'Denotes gray or white matter.'
+
+        # both Tal and MNI
+        if toggle:
+            sidecar['mni.x'] = 'x-axis position in MNI coordinates'
+            sidecar['mni.y'] = 'y-axis position in MNI coordinates'
+            sidecar['mni.z'] = 'z-axis position in MNI coordinates'
+
         return sidecar
+    
+    def write_BIDS_electrodes(self, atlas, toggle):
+        bids_path = self._BIDS_path().update(suffix='electrodes', extension='.tsv', datatype='ieeg')
+        # both Tal and MNI, default to Tal (mirror cmlreaders)
+        if toggle:
+            bids_path.update(space='Talairach')
+            os.makedirs(bids_path.directory, exist_ok=True)
+            self._to_tsv(self.electrodes, bids_path.fpath)
+        elif atlas == 'tal':
+            bids_path.update(space='Talairach')
+            os.makedirs(bids_path.directory, exist_ok=True)
+            self._to_tsv(self.electrodes_tal, bids_path.fpath)
+        elif atlas == 'mni':
+            bids_path.update(space='MNI152NLin6ASym')
+            os.makedirs(bids_path.directory, exist_ok=True)
+            self._to_tsv(self.electrodes_mni, bids_path.fpath)
+
+        # also write sidecar json
+        with open(bids_path.update(extension='.json').fpath, 'w') as f:
+            json.dump(fp=f, obj=self.electrodes_sidecar)
     
     # ---------- Channels ----------
     def load_pairs(self):
@@ -163,14 +291,14 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     
     def pairs_to_channels(self):
         channels = pd.DataFrame({'name': np.array(self.pairs.label)})
-        channels['type'] = [self.ELEC_TYPES_BIDS.get(x) for x in self.pairs.type]
+        channels['type'] = [self.ELEC_TYPES_BIDS.get(x.upper()) for x in self.pairs.type]
         channels['units'] = 'V'                                                    # convert EEG to V
         channels['low_cutoff'] = 'n/a'                                             # highpass filter (don't actually know this for clinical eeg)
         channels['high_cutoff'] = 'n/a'                                            # lowpass filter (mne adds Nyquist frequency = 2 x sampling rate)
         channels['reference'] = 'bipolar'
         channels['group'] = np.array(self.pairs.grpName)
         channels['sampling_frequency'] = self.sfreq
-        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.pairs.type]
+        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x.upper()) for x in self.pairs.type]
         channels['notch'] = 'n/a'
         channels = channels.fillna('n/a')                                          # remove NaN
         channels = channels.replace('', 'n/a')                                     # no empty cells
@@ -178,24 +306,32 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     
     def contacts_to_channels(self):
         channels = pd.DataFrame({'name': np.array(self.contacts.label)})
-        channels['type'] = [self.ELEC_TYPES_BIDS.get(x) for x in self.contacts.type]
+        channels['type'] = [self.ELEC_TYPES_BIDS.get(x.upper()) if x.upper() in self.ELEC_TYPES_BIDS.keys() else 
+                            self.CH_TYPES.get(self.subject) for x in self.contacts.type]
         channels['units'] = 'V'                                                    # convert EEG to V
         channels['low_cutoff'] = 'n/a'                                             # highpass filter (don't actually know this for clinical eeg)
         channels['high_cutoff'] = 'n/a'                                            # lowpass filter (mne adds Nyquist frequency = 2 x sampling rate)
         channels['group'] = np.array(self.contacts.grpName)
         channels['sampling_frequency'] = self.sfreq
-        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.contacts.type]
+        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x.upper()) for x in self.contacts.type]
         channels['notch'] = 'n/a'
         channels = channels.fillna('n/a')                                          # remove NaN
         channels = channels.replace('', 'n/a')                                     # no empty cells
         return channels
     
     # ---------- EEG ----------
+    # set sfreq and recording_duration attributes
+    def eeg_metadata(self):
+        eeg = self.reader.load_eeg()
+        sfreq = eeg.samplerate
+        recording_duration = eeg.data.shape[-1] / sfreq
+        return sfreq, recording_duration
+    
     def eeg_sidecar(self, ref):                 # overwrite for different 'type' field
         sidecar = {'TaskName': self.experiment}
         sidecar['TaskDescription'] = 'delayed free recall of word lists'
         sidecar['SamplingFrequency'] = float(self.sfreq)
-        sidecar['PowerLineFrequency'] = 60.0
+        sidecar['PowerLineFrequency'] = 60.0    # check for German subjects
         sidecar['SoftwareFilters'] = 'n/a'
         sidecar['HardwareFilters'] = 'n/a'
         sidecar['RecordingDuration'] = float(self.recording_duration)
@@ -214,3 +350,81 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
             sidecar['MiscChannelCount'] = len(self.contacts[self.contacts.type=='n/a'].index)
             sidecar['EEGChannelCount'] = 0
         return sidecar
+    
+    # ---------- EEG (monopolar) ----------
+    def eeg_mono_to_BIDS(self):
+        eeg = self.reader.load_eeg(scheme=self.contacts)
+        eeg.data = eeg.data / self.unit_scale              # convert to V before instantiating raw object
+        eeg_mne = eeg.to_mne()
+        mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_mono.type]))    # ecog or seeg
+        eeg_mne.set_channel_types(mapping)                                                     # set channel types
+
+        return eeg_mne
+    
+    # ---------- EEG (bipolar) ----------
+    def eeg_bi_to_BIDS(self):
+        eeg = self.reader.load_eeg(scheme=self.pairs)
+        eeg.data = eeg.data / self.unit_scale               # convert to V before instantiating raw object
+        eeg_mne = eeg.to_mne()
+        mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_bi.type]))
+        eeg_mne.set_channel_types(mapping)
+
+        return eeg_mne
+    
+    # ---------------------------------
+    # run conversion
+    def run(self):
+        # ---------- Events ----------
+        self.reader = self.cml_reader()
+        self.wordpool_file = self.set_wordpool()
+        self.events = self.events_to_BIDS()
+        self.events_descriptor = self.make_events_descriptor()
+        self.write_BIDS_beh()
+
+        # terminate if no monopolar or bipolar EEG
+        if not self.monopolar and not self.bipolar:
+            return True
+
+        # ---------- EEG ----------
+        self.sfreq, self.recording_duration = self.eeg_metadata()
+
+        # ---------- Electrodes ----------
+        self.contacts = self.load_contacts()
+
+        # both Talairach and MNI coordinates (default to Tal)
+        if self.tal and self.mni:
+            self.electrodes = self.contacts_to_electrodes('tal', True)
+            self.electrodes_sidecar = self.make_electrodes_sidecar('tal', True)
+            self.write_BIDS_electrodes('tal', True)
+            self.write_BIDS_coords('tal')
+        elif self.tal:
+            self.electrodes_tal = self.contacts_to_electrodes('tal', False)
+            self.electrodes_sidecar = self.make_electrodes_sidecar('tal', False)
+            self.write_BIDS_electrodes('tal', False)
+            self.write_BIDS_coords('tal')
+        elif self.mni:
+            self.electrodes_mni = self.contacts_to_electrodes('mni', False)
+            self.electrodes_sidecar = self.make_electrodes_sidecar('mni', False)
+            self.write_BIDS_electrodes('mni', False)
+            self.write_BIDS_coords('mni')
+
+        # ---------- Channels ----------
+        self.pairs = self.load_pairs()
+        if self.bipolar:
+            self.channels_bi = self.pairs_to_channels()
+        if self.monopolar:
+            self.channels_mono = self.contacts_to_channels()
+
+        # ---------- EEG ----------
+        if self.bipolar:
+            self.eeg_sidecar_bi = self.eeg_sidecar('bipolar')
+            self.eeg_bi = self.eeg_bi_to_BIDS()
+            self.write_BIDS_ieeg('bipolar')
+            self.write_BIDS_channels('bipolar')
+        if self.monopolar:
+            self.eeg_sidecar_mono = self.eeg_sidecar('monopolar')
+            self.eeg_mono = self.eeg_mono_to_BIDS()
+            self.write_BIDS_ieeg('monopolar')
+            self.write_BIDS_channels('monopolar')
+
+        return True

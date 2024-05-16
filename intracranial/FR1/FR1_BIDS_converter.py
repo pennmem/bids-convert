@@ -9,25 +9,25 @@ import mne_bids
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
 class FR1_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('wordpools/wordpool_EN.txt', dtype=str)
-    wordpool_SP = np.loadtxt('wordpools/wordpool_SP.txt', dtype=str)
-    wordpool_short_EN = np.loadtxt('wordpools/wordpool_short_EN.txt', dtype=str)
-    wordpool_long_EN = np.loadtxt('wordpools/wordpool_long_EN.txt', dtype=str)
-    wordpool_long_SP = np.loadtxt('wordpools/wordpool_long_SP.txt', dtype=str)
+    wordpool_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/FR1/wordpools/wordpool_EN.txt', dtype=str)
+    wordpool_SP = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/FR1/wordpools/wordpool_SP.txt', dtype=str)
+    wordpool_short_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/FR1/wordpools/wordpool_short_EN.txt', dtype=str)
+    wordpool_long_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/FR1/wordpools/wordpool_long_EN.txt', dtype=str)
+    wordpool_long_SP = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/FR1/wordpools/wordpool_long_SP.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS_storage/FR1/'):
+    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/FR1/'):
         super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
 
     # ---------- Events ----------
     def set_wordpool(self):
         evs = self.reader.load('events')
-        word_evs = evs[evs['type']=='WORD']; word_evs[word_evs['list']!=-1]    # remover practice list
+        word_evs = evs[evs['type']=='WORD']; word_evs = word_evs[word_evs['list']!=-1]    # remover practice list
         if np.all([1 if x in self.wordpool_EN else 0 for x in word_evs.item_name]):
             wordpool_file = 'wordpools/wordpool_EN.txt'
         elif np.all([1 if x in self.wordpool_short_EN else 0 for x in word_evs.item_name]):
             wordpool_file = 'wordpools/wordpool_short_EN.txt'
-        elif np.all([1 if x in self.wordpool_long_EN.txt else 0 for x in word_evs.item_name]):
+        elif np.all([1 if x in self.wordpool_long_EN else 0 for x in word_evs.item_name]):
             wordpool_file = 'wordpools/wordpool_long_EN.txt'
         elif np.all([1 if x in self.wordpool_SP else 0 for x in word_evs.item_name]):
             wordpool_file = 'wordpools/wordpool_SP.txt'
@@ -40,28 +40,54 @@ class FR1_BIDS_converter(intracranial_BIDS_converter):
     
     def events_to_BIDS(self):                   # can load events for all 589 FR1 sessions
         events = self.reader.load('events')
-        events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type'})     # rename columns
-        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0        # onset from first event [ms]
-        events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0   # event duration [ms]
-        events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)             # replace events with negative duration with 0.0 s
-        events['response_time'] = 'n/a'                                                            # response time [ms]
+        events = cml.correct_retrieval_offsets(events, self.reader)            # apply offset corrections
+        events = cml.correct_countdown_lists(events, self.reader)              # apply countdown list corrections
+        events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type'})                      # rename columns
+        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                               # onset from first event [s]
+        events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0            # event duration [s]
+        events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)                      # replace events with negative duration with 0.0 s
+        events = self.apply_event_durations(events)                                                      # apply well-defined durations [s]
+        events['response_time'] = 'n/a'                                                                  # response time [s]
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV') | 
-                   (events.trial_type=='PROB'), 'response_time'] = events['duration']           # slightly superfluous
+                   (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0            # use rectime
         events['stim_file'] = np.where((events.trial_type=='WORD') & (events.list!=-1), self.wordpool_file, 'n/a')    # add wordpool to word events
-        events.loc[events.answer==-999, 'answer'] = 'n/a'                                       # non-math events no answer
+        events.loc[events.answer==-999, 'answer'] = 'n/a'                                                # non-math events no answer
         events['item_name'] = events.item_name.replace('X', 'n/a')                              
         events = events.drop(columns=['is_stim', 'stim_list', 'stim_params', 'mstime', 'protocol', 'item_num', 
-                                      'iscorrect', 'eegfile', 'exp_version', 'montage', 'msoffset'])   # drop unneeded fields
-        events = events.drop(columns=['intrusion', 'recalled'])                    # dropping because confusing
-        if 'PRACTICE_WORD' in events.trial_type.unique():                                # practice words wrongly given serial positions 0-11
+                                      'iscorrect', 'eegfile', 'exp_version', 'montage', 'msoffset'])     # drop unneeded fields
+        events = events.drop(columns=['intrusion', 'recalled'])                                          # dropping because confusing
+        if 'PRACTICE_WORD' in events.trial_type.unique():                                                # practice words wrongly given serial positions 0-11
             events.loc[events.trial_type=='PRACTICE_WORD', 'serialpos'] = events['serialpos'] + 1
-        events = events.fillna('n/a')                                             # change NaN to 'n/a'
-        events = events.replace('', 'n/a')                                        # try to resolve empty cell issue
+        events = events.fillna('n/a')                                                                    # change NaN to 'n/a'
+        events = events.replace('', 'n/a')                                                               # resolve empty cell issue
         
         events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name', 
-                        'serialpos', 'list', 'test', 'answer', 'experiment', 'session', 'subject']]       # re-order columns
+                        'serialpos', 'list', 'test', 'answer', 'experiment', 'session', 'subject']]      # re-order columns
         
         return events
+    
+    def apply_event_durations(self, events):
+        durations = []
+        for _, row in events.iterrows():
+            # fixation events (only fix those that are well-defined)
+            if row.trial_type == 'ORIENT' or row.trial_type == 'PRACTICE_ORIENT' or row.trial_type == 'RETRIEVAL_ORIENT_START':
+                durations.append(1.6)
+
+            # countdown events = 10000 ms
+            elif row.trial_type == 'COUNTDOWN_START':
+                durations.append(10.0)
+
+            # word presentation events = 1600 ms
+            elif row.trial_type == 'WORD' or row.trial_type == 'PRACTICE_WORD':
+                durations.append(1.6)
+
+            # keep current duration
+            else:
+                durations.append(row.duration)
+
+        events['duration'] = durations        # preserves column order
+        return events
+
     
     def make_events_descriptor(self):
         descriptions = {
@@ -145,5 +171,7 @@ class FR1_BIDS_converter(intracranial_BIDS_converter):
     # ---------- EEG ----------
     def eeg_sidecar(self, ref):
         sidecar = super().eeg_sidecar(ref)
+        sidecar = pd.DataFrame(sidecar, index=[0])
         sidecar.insert(1, 'TaskDescription', 'delayed free recall of word lists')    # place in second column
+        sidecar = sidecar.to_dict(orient='records')[0]
         return sidecar

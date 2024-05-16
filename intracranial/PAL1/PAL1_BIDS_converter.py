@@ -9,11 +9,11 @@ import mne_bids
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
 class PAL1_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('wordpools/wordpool_EN.txt', dtype=str)
-    wordpool_SP = np.loadtxt('wordpools/wordpool_SP.txt', dtype=str)
+    wordpool_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/PAL1/wordpools/wordpool_EN.txt', dtype=str)
+    wordpool_SP = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/PAL1/wordpools/wordpool_SP.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS_storage/PAL1/'):
+    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/PAL1/'):
         super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
 
     # ---------- Events ----------
@@ -32,18 +32,56 @@ class PAL1_BIDS_converter(intracranial_BIDS_converter):
         events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                      # onset from first event [s]
         events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0   # event duration [s] --> lots of superfluous events may mess this up
         events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)             # replace events with negative duration with 0.0s
+        events = self.apply_event_durations(events)                                             # apply well-defined durations [s]
         events['response_time'] = 'n/a'                                                         # response time [s]
-        events.loc[events.trial_type=='PROB', 'response_time'] = events['rectime']              # math events use rectime
-        events.loc[events.trial_type=='REC_EVENT', 'response_time'] = events['RT']              # recall events use RT
-        # stim_file, serialpos, probepos, 
+        events.loc[events.trial_type=='PROB', 'response_time'] = events['rectime'] / 1000.0     # math events use rectime [s]
+        events.loc[events.trial_type=='REC_EVENT', 'response_time'] = events['RT'] / 1000.0     # recall events use RT [s]
+        events['stim_file'] = np.where((events.trial_type.isin(['STUDY_PAIR', 'PROBE_START', 'TEST_PROBE']))
+                                        & (events.list>0), self.wordpool_file, 'n/a')           # add wordpool to word events
         
         events = events.fillna('n/a')                    # change NaN to 'n/a'
         events = events.replace('', 'n/a')               # no empty cells
-        
-        events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 
-                         'serialpos', 'probepos', 'probe_word', 'resp_word', 'study_1', 'study_2', 
+
+        events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file',
+                         'serialpos', 'probepos', 'probe_word', 'resp_word', 'study_1', 'study_2',    # leave probepos and serialpos as is
                          'list', 'test', 'answer', 'experiment', 'session', 'subject']]         # re-order columns
+
         return events
+    
+    def apply_event_durations(self, events):
+        durations = []
+        
+        # toggles
+        study_orient_toggle = 'STUDY_ORIENT' in events['trial_type'].unique() and 'STUDY_ORIENT_OFF' not in events['trial_type'].unique()
+        test_orient_toggle = 'TEST_ORIENT' in events['trial_type'].unique() and 'RETRIEVAL_ORIENT_OFF' not in events['trial_type'].unique()
+
+        for _, row in events.iterrows():
+            # fixation events
+            # STUDY_ORIENT, TEST_ORIENT = 275 ms if missing offset events
+            if row.trial_type == 'STUDY_ORIENT' and study_orient_toggle:
+                durations.append(0.275)
+            elif row.trial_type == 'TEST_ORIENT' and test_orient_toggle:
+                durations.append(0.275)
+
+            # countdown events = 10000 ms
+            elif row.trial_type == 'COUNTDOWN_START':
+                durations.append(10.0)
+
+            # word pair presentation events = 4000 ms
+            elif row.trial_type == 'STUDY_PAIR' or row.trial_type == 'PRACTICE_PAIR':
+                durations.append(4.0)
+
+            # recall cue events = 4000 ms
+            elif row.trial_type == 'TEST_PROBE' or row.trial_type == 'PROBE_START' or row.trial_type == 'PRACTICE_PROBE':
+                durations.append(4.0)
+
+            # keep current duration
+            else:
+                durations.append(row.duration)
+
+        events['duration'] = durations        # preserves column order
+        return events
+
     
     def make_events_descriptor(self):
         descriptions = {
@@ -143,5 +181,7 @@ class PAL1_BIDS_converter(intracranial_BIDS_converter):
     # ---------- EEG ----------
     def eeg_sidecar(self, ref):
         sidecar = super().eeg_sidecar(ref)
+        sidecar = pd.DataFrame(sidecar, index=[0])
         sidecar.insert(1, 'TaskDescription', 'cued recall of paired associates')
+        sidecar = sidecar.to_dict(orient='records')[0]
         return sidecar

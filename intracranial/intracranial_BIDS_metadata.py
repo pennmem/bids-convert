@@ -13,7 +13,7 @@ from tqdm import tqdm
 import math
 import string
 
-# class to use when doing metadata checks before converter experiment to BIDS format
+# class to use when doing metadata checks before converting experiment to BIDS format
 class intracranial_BIDS_metadata:
     BRAIN_REGIONS = ['wb.region', 'ind.region', 'das.region', 'stein.region']
 
@@ -30,7 +30,8 @@ class intracranial_BIDS_metadata:
     # try to load events, contacts, pairs, monopolar and bipolar EEG
     # determine system_version, unit_scale, mni, tal, area, eegfiles
     def metadata(self):
-        metadata_df = pd.DataFrame(columns=['subject', 'experiment', 'session', 'system_version', 'unit_scale', 
+        metadata_df = pd.DataFrame(columns=['subject', 'experiment', 'session', 'events', 'contacts', 'pairs', 
+                                            'max_label_len', 'system_version', 'unit_scale', 
                                             'monopolar', 'bipolar', 'mni', 'tal', 'area', 'wb.region', 'ind.region', 
                                             'das.region', 'stein.region', 'eegfiles'])
         for _, row in tqdm(self.df_select.iterrows()):
@@ -48,7 +49,7 @@ class intracranial_BIDS_metadata:
             contacts_bool, mni, tal = self._load_contacts(reader)
 
             # load in pairs
-            pairs_bool = self._load_pairs(reader)
+            pairs_bool, max_label_len = self._load_pairs(reader)
 
             # load in monopolar EEG
             if contacts_bool:
@@ -77,8 +78,8 @@ class intracranial_BIDS_metadata:
             # append to dataframe of metadata
             metadata_df = pd.concat([metadata_df, 
                                      pd.DataFrame({'subject':row.subject, 'experiment':row.experiment, 'session':row.session, 
-                                                   'events':events_bool, 'contacts':contacts_bool, 'pairs':pairs_bool, 
-                                                   'system_version':system_version, 'unit_scale':unit_scale, 
+                                                   'events':events_bool, 'contacts':contacts_bool, 'pairs':pairs_bool,
+                                                   'max_label_len':max_label_len, 'system_version':system_version, 'unit_scale':unit_scale, 
                                                    'monopolar':monopolar, 'bipolar':bipolar, 'mni':mni, 'tal':tal, 'area':area, 
                                                    'wb.region':brain_regions['wb.region'], 'ind.region':brain_regions['ind.region'], 
                                                    'das.region':brain_regions['das.region'], 'stein.region':brain_regions['stein.region'], 
@@ -118,9 +119,10 @@ class intracranial_BIDS_metadata:
     def _load_pairs(self, reader):
         try:
             pairs = reader.load('pairs')
-            return True
+            max_label_len = max([len(x) for x in pairs.label])
+            return True, max_label_len
         except BaseException as e:
-            return False
+            return False, None
         
     def _load_eeg(self, reader, ref):
         if ref == 'bipolar':
@@ -229,7 +231,9 @@ class intracranial_BIDS_metadata:
         else:
             # read in from csv
             sys1_units = pd.read_csv('system_1_unit_conversions.csv')
-            return sys1_units[sys1_units.subject == row.subject].iloc[0]['conversion_to_V']
+            return sys1_units[(sys1_units.subject == row.subject) &
+                              (sys1_units.experiment == row.experiment) & 
+                              (sys1_units.session == row.session)].iloc[0]['conversion_to_V']
     
     def _area_data(self, row):
         area_path = f'/data10/RAM/subjects/{row.subject}/docs/area.txt'

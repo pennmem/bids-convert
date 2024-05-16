@@ -9,11 +9,11 @@ import mne_bids
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
 class catFR1_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_categorized_EN = np.loadtxt('wordpools/wordpool_categorized_EN.txt', dtype=str)
-    wordpool_categorized_SP = np.loadtxt('wordpools/wordpool_categorized_SP.txt', dtype=str)
+    wordpool_categorized_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/catFR1/wordpools/wordpool_categorized_EN.txt', dtype=str)
+    wordpool_categorized_SP = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/catFR1/wordpools/wordpool_categorized_SP.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS_storage/catFR1/'):
+    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/catFR1/'):
         super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
 
     # ---------- Events ----------
@@ -33,13 +33,16 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
     
     def events_to_BIDS(self):
         events = self.reader.load('events')
+        events = cml.correct_retrieval_offsets(events, self.reader)        # apply offset corrections
+        events = cml.correct_countdown_lists(events, self.reader)          # apply countdown list corrections
         events = events.rename(columns={'eegoffset':'sample', 'type': 'trial_type'})               # rename columns
-        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                         # onset from first event [ms]
-        events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0      # event duration [ms]
+        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                         # onset from first event [s]
+        events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0      # event duration [s]
         events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)                # replace events with negative duration with 0.0 s
-        events['response_time'] = 'n/a'                                                            # response time [ms]
+        events = self.apply_event_durations(events)                                                # apply well-defined durations [s]
+        events['response_time'] = 'n/a'                                                            # response time [s]
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV') | 
-                  (events.trial_type=='PROB'), 'response_time'] = events['duration']               # practice trial no record of recalls
+                  (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0 
         events['stim_file'] = np.where((events.trial_type=='WORD') & (events.list!=-1), self.wordpool_file, 'n/a')     # add wordpool to word events
         events.loc[events.answer==-999, 'answer'] = 'n/a'                                          # non-math events no answer
         events['item_name'] = events.item_name.replace('X', 'n/a')
@@ -54,6 +57,28 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
                         'serialpos', 'list', 'test', 'answer', 'experiment', 'session', 'subject']]     # re-order columns
         return events
     
+    def apply_event_durations(self, events):
+        durations = []
+        for _, row in events.iterrows():
+            # fixation events (only fix those that are well-defined)
+            if row.trial_type == 'ORIENT' or row.trial_type == 'PRACTICE_ORIENT' or row.trial_type == 'RETRIEVAL_ORIENT_START':
+                durations.append(1.6)
+
+            # countdown events = 10000 ms
+            elif row.trial_type == 'COUNTDOWN' or row.trial_type == 'COUNTDOWN_START':
+                durations.append(10.0)
+
+            # word presentation events = 1600 ms
+            elif row.trial_type == 'WORD' or row.trial_type == 'PRACTICE_WORD':
+                durations.append(1.6)
+
+            # keep current duration
+            else:
+                durations.append(row.duration)
+
+            events['duration'] = durations    # preserves column order
+            return events
+    
     def make_events_descriptor(self):
         descriptions = {
             "SESS_START": "Beginning of session.",
@@ -63,6 +88,7 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
             "REC_END": "Recall phase ends.",
             "REC_WORD": "Recalled word, onset of speech (during free recall).",
             "REC_WORD_VV": "Vocalization (during free recall).",
+            'COUNTDOWN': 'Beginning of pre-list presentation countdown.',
             'COUNTDOWN_START': 'Beginning of pre-list presentation countdown.',
             'COUNTDOWN_END': 'End of pre-list presentation countdown.', 
             'DISTRACT_START': 'Beginning of math distractor phase.', 
@@ -137,5 +163,7 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
     # ---------- EEG ----------
     def eeg_sidecar(self, ref):
         sidecar = super().eeg_sidecar(ref)
+        sidecar = pd.DataFrame(sidecar, index=[0])
         sidecar.insert(1, 'TaskDescription', 'delayed free recall of categorized word lists')   # place in second column
+        sidecar = sidecar.to_dict(orient='records')[0]
         return sidecar
