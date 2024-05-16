@@ -87,10 +87,11 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         events['experiment'] = self.experiment                                                       # math events don't have experiment field
         # transformations
         events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type'})                  # rename columns
-        events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0        # event duration [ms]
+        events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0        # event duration [s]
         events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)                  # replace events with negative duration with 0.0 s
-        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                           # onset from first event [ms]
-        events['response_time'] = 'n/a'                                                              # response time [ms]
+        events = self.apply_event_durations(events)                                                  # apply well-defined durations [s]
+        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                           # onset from first event [s]
+        events['response_time'] = 'n/a'                                                              # response time [s]
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV') |
                    (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0
         events['stim_file'] = np.where(events.trial_type=='WORD', self.wordpool_file, 'n/a')              # add wordpool to word events
@@ -112,6 +113,24 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
             events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time',
                              'stim_file', 'item_name', 'serialpos', 'list',
                              'experiment', 'session', 'subject']]
+        return events
+    
+    def apply_event_durations(self, events):
+        durations = []
+        for _, row in events.iterrows():
+            # fixation events = 1600 ms
+            if row.trial_type == 'ORIENT':
+                durations.append(1.6)
+
+            # word events = 1600 ms
+            elif row.trial_type == 'WORD':
+                durations.append(1.6)
+
+            # keep current duration
+            else:
+                durations.append(row.duration)
+
+        events['duration'] = durations        # preserves column order
         return events
     
     def make_events_descriptor(self):
