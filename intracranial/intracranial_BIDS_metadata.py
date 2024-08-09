@@ -39,7 +39,6 @@ class intracranial_BIDS_metadata:
                                    localization=row.localization, montage=row.montage)
             
             # values and toggles to set in metadata json file for each subject-session
-            area = False
 
             # load in behavioral events
             events_bool = self._load_events(reader)
