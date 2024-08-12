@@ -166,4 +166,5 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
         sidecar = pd.DataFrame(sidecar, index=[0])
         sidecar.insert(1, 'TaskDescription', 'delayed free recall of categorized word lists')   # place in second column
         sidecar = sidecar.to_dict(orient='records')[0]
+        sidecar['ElectricalStimulation'] = False
         return sidecar
