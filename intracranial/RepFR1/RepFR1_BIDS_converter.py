@@ -5,7 +5,7 @@ import numpy as np
 from tqdm import tqdm
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
-class RepFR_BIDS_converter(intracranial_BIDS_converter):
+class RepFR1_BIDS_converter(intracranial_BIDS_converter):
     wordpool_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/RepFR1/wordpools/wordpool_EN.txt', dtype=str)
     wordpool_SP = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/RepFR1/wordpools/wordpool_SP.txt', dtype=str)
     
