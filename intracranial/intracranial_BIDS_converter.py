@@ -5,6 +5,7 @@ import numpy as np
 import re
 import json
 import os
+from glob import glob
 import mne_bids
 
 
@@ -80,6 +81,35 @@ class intracranial_BIDS_converter:
         try:
             area = np.loadtxt(area_path, dtype=str)
             area_map = dict(zip(area[:, 0], area[:, 1].astype(float)))
+        except BaseException:
+            if self.system_version == 4.0:
+                area_map = self.generate_area_map_system_4()
+            else:
+                area_map = {}
+
+        return area_map
+    
+    def generate_area_map_system_4(self):
+        pf = cml.PathFinder(self.subject, self.experiment, self.session)
+        reader = cml.CMLReader(self.subject, self.experiment, self.session)
+
+        try:
+            path = f'/data10/RAM/subjects/{self.subject}/behavioral/{self.experiment}/session_{self.session}/elemem/{pf.find("elemem_session_folder")}/'
+            config_files = glob(path + f'{self.subject}*.csv')       # maybe should specificy "mono" in pattern match
+            if len(config_files) == 1:                               # config files don't have consisten names, but want the monopolar (not bipolar) config
+                areas = pd.read_csv(config_files[0], names=['label', 'index', 'area'], header=None)
+                contacts = reader.load('contacts')
+                area = pd.merge(areas, contacts)[['label', 'area']]
+
+                groups = []
+                for _, row in area.iterrows():
+                    split_label = list(row.label)
+                    alpha_idx = [i for i, c in enumerate(split_label) if c.isalpha()]   # indices of alphabetical characters in label
+                    groups.append(row.label[:alpha_idx[-1]+1])
+                
+                area['group'] = groups
+                area_groups = area.groupby(['group'])['area'].agg(pd.Series.mode).reset_index()
+                area_map = dict(zip(area_groups.group, area_groups.area.astype(float)))
         except BaseException:
             area_map = {}
 

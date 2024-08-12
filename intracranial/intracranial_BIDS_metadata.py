@@ -66,7 +66,7 @@ class intracranial_BIDS_metadata:
             system_version, unit_scale = self._sysv_units(row)
 
             # determine area --> don't actually make the mapping here
-            area = self._area_data(row)
+            area = self._area_data(row, system_version)
 
             # create dictionary mapping brain regions to number of contacts with valid entries
             brain_regions = self._brain_regions(row)
@@ -234,9 +234,9 @@ class intracranial_BIDS_metadata:
                               (sys1_units.experiment == row.experiment) & 
                               (sys1_units.session == row.session)].iloc[0]['conversion_to_V']
     
-    def _area_data(self, row):
+    def _area_data(self, row, system_version):
         area_path = f'/data10/RAM/subjects/{row.subject}/docs/area.txt'
-        return os.path.exists(area_path)
+        return os.path.exists(area_path) or system_version == 4.0       # all system 4 should have area (may be in config instead of area.txt)
     
     def _brain_regions(self, row):
         # read in from csv
