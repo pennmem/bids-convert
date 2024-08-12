@@ -50,7 +50,7 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
 
     def apply_event_durations(self, events):
         # word durations
-        wd_path = self.root + f'{self.experiment}/metadata/word_durations.csv'
+        wd_path = '/home1/hherrema/BIDS/RepFR1/metadata/word_durations.csv'             # update to a shared location
         word_durations = pd.read_csv(wd_path)
         wd = word_durations[(word_durations.subject == self.subject) & (word_durations.session == self.session)].iloc[0].word_duration_rounded
         wd /= 1000                               # convert from ms to s
