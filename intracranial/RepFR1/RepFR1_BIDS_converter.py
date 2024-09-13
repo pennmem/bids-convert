@@ -85,7 +85,7 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
             "REC_START": "Start of recall phase.",
             "REC_END": "End of recall phase.",
             "REC_WORD": "Recalled word, onset of speech (during free recall).", 
-            "REC_WORD_VV": "Vocalization, (during free recall)."
+            "REC_WORD_VV": "Vocalization (during free recall)."
         }
         HED = {
             "onset": {"Description": "Onset (in seconds) of the event, measured from the beginning of the acquisition of the first data point stored in the corresponding task data file."},
