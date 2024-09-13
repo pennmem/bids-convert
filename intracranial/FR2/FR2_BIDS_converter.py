@@ -172,7 +172,7 @@ class FR2_BIDS_converter(intracranial_BIDS_converter):
     def eeg_sidecar(self, ref):
         sidecar = super().eeg_sidecar(ref)
         sidecar = pd.DataFrame(sidecar, index=[0])
-        sidecar.insert(1, 'TaskDescription', 'open-loop stimulation in delayed free recall')              # place in second column
+        sidecar.insert(1, 'TaskDescription', 'delayed free recall with open-loop stimulation at encoding')              # place in second column
         sidecar = sidecar.to_dict(orient='records')[0]
         sidecar['ElectricalStimulation'] = True
         return sidecar
