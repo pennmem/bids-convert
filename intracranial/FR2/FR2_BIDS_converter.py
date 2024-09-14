@@ -77,7 +77,8 @@ class FR2_BIDS_converter(intracranial_BIDS_converter):
                 durations.append(4.6)
 
             # keep current duration
-            durations.append(row.duration)
+            else:
+                durations.append(row.duration)
 
         events['duration'] = durations               # preserves column order
         return events
