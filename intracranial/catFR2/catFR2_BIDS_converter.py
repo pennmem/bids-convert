@@ -45,6 +45,8 @@ class catFR2_BIDS_converter(intracranial_BIDS_converter):
                    (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0       # use rectime
         events['stim_file'] = np.where(events.trial_type=='WORD', self.wordpool_file, 'n/a')        # add wordpool to word events
         events.loc[events.answer==-999, 'answer'] = 'n/a'                                           # non-math events no answer
+        events.loc[(events['trial_type'].isin(['START', 'PROB', 'STOP'])) & 
+                   (events['recalled'] == -999), 'recalled'] = 0                                    # math events have recalled = -999
         events['item_name'] = events.item_name.replace('X', 'n/a')
         events['category'] = events.category.replace('X', 'n/a')
         events.loc[events.trial_type=='PRACTICE_WORD', 'list'] = -1                                 # practice words given list = -999
@@ -54,7 +56,7 @@ class catFR2_BIDS_converter(intracranial_BIDS_converter):
 
         # select and re-order columns
         events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name', 'category',
-                         'serialpos', 'list', 'test', 'answer', 'stimulation', 'stim_list', 'stim_duration', 'anode_label', 'cathode_label',
+                         'serialpos', 'recalled', 'list', 'test', 'answer', 'stimulation', 'stim_list', 'stim_duration', 'anode_label', 'cathode_label',
                          'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width', 'experiment', 'session', 'subject']]
         
         return events
@@ -136,7 +138,7 @@ class catFR2_BIDS_converter(intracranial_BIDS_converter):
             "duration": {"Description": "Duration (in seconds) of the event, measured from the onset of the event."},
             "sample": {"Description": "Onset of the event according to the sampling scheme (frequency)."},
             "trial_type": {"LongName": "Event category", 
-                        "Description": "Indicator of type of task action that occurs at the marked time", 
+                        "Description": "Indicator of type of task action that occurs at the marked time.", 
                         "Levels": {k:descriptions[k] for k in self.events["trial_type"].unique()}},
             "response_time": {"Description": "Time (in seconds) between onset of recall phase and recall (for recalls and vocalizations), or between onset of problem on screen and response (for math problems)."},
             "stim_file": {"LongName": "Stimulus File", 
@@ -144,7 +146,8 @@ class catFR2_BIDS_converter(intracranial_BIDS_converter):
             "item_name": {"Description": "The word being presented or recalled in a WORD or REC_WORD event."},
             "category": {"Description": "Semantic category of word presented or recalled in a WORD or REC_WORD event."},
             'serialpos': {'LongName': 'Serial Position', 
-                          'Description': 'The order position of a word presented in an WORD event.'},
+                          'Description': 'The order position (at encoding) of a word presented in an WORD event or a recall in a REC_WORD event.'},
+            "recalled": {"Description": "For WORD events, denotes if presented word is recalled.  For REC_WORD events, denotes if recall is correct."},
             "list": {"LongName": "List Number",
                      "Description": "Word list (1-25) during which the event occurred. Trial = -1 indicates practice list."},
             'test': {"LongName": "Math problem", 
