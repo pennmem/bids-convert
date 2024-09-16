@@ -170,7 +170,7 @@ class catFR2_BIDS_converter(intracranial_BIDS_converter):
                         "Description": "The string identifier of the subject, e.g. R1001P."},
         }
         events_descriptor = {k:HED[k] for k in HED if k in self.events.columms}
-        raise NotImplementedError
+        return events_descriptor
     
     # ---------- EEG ----------
     def eeg_sidecar(self, ref):
