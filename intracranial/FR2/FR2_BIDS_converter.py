@@ -44,14 +44,17 @@ class FR2_BIDS_converter(intracranial_BIDS_converter):
                 (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0             # use rectime
         events['stim_file'] = np.where((events.trial_type=='WORD') & (events.list!=-1), self.wordpool_file, 'n/a')    # add wordpool to word events
         events.loc[events.answer==-999, 'answer'] = 'n/a'                                              # non-math events no answer
+        events.loc[(events['trial_type'].isin(['START', 'PROB', 'STOP'])) & 
+                   (events['recalled'] == -999), 'recalled'] = 0                                    # math events have recalled = -999
         events['item_name'] = events.item_name.replace('X', 'n/a')
         events.loc[events.trial_type=='PRACTICE_WORD', 'serialpos'] = events['serialpos'] + 1          # practice words wrongly given serial positions 0-11 (all sessions have practice words)
+        events = self.assign_serial_positions(events)                                                  # assign serial positions to recalls
         events = events.fillna('n/a')                                                                  # change NaN to 'n/a'
         events = events.replace('', 'n/a')
 
         # select and re-order columns
         events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name',
-                         'serialpos', 'list', 'test', 'answer', 'stimulation', 'stim_list', 'stim_duration', 'anode_label', 'cathode_label',
+                         'serialpos', 'recalled', 'list', 'test', 'answer', 'stimulation', 'stim_list', 'stim_duration', 'anode_label', 'cathode_label',
                          'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width', 
                          'experiment', 'session', 'subject']]
         
@@ -81,6 +84,28 @@ class FR2_BIDS_converter(intracranial_BIDS_converter):
                 durations.append(row.duration)
 
         events['duration'] = durations               # preserves column order
+        return events
+    
+    # assign serial positions to recall events (all given serial position = -999)
+    def assign_serial_positions(self, events):
+        serialpos = []
+        for l, l_evs in events.groupby('list', sort=False):         # preserve order
+            w_evs = l_evs.query("trial_type == 'WORD'")
+            r_evs = l_evs.query("trial_type == 'REC_WORD'")
+            
+            # recall events all given default serial position == -999
+            if len(r_evs.serialpos.unique()) == 1 and r_evs.serialpos.unique()[0] == -999:
+                words = np.array(w_evs.item_name)
+                recs = np.array(r_evs.item_name)
+                sp = [np.argwhere(words == r)[0][0] + 1 if r in words else -999 for r in recs]
+            
+            # serial positions already assigned
+            else:
+                sp = list(r_evs.serialpos)
+
+            serialpos.extend(sp)
+
+        events.loc[events['trial_type'] == 'REC_WORD', 'serialpos'] = serialpos
         return events
     
     # unpack stimulation parameters from dictionary and add as columns to events dataframe
@@ -134,14 +159,15 @@ class FR2_BIDS_converter(intracranial_BIDS_converter):
             "duration": {"Description": "Duration (in seconds) of the event, measured from the onset of the event."},
             "sample": {"Description": "Onset of the event according to the sampling scheme (frequency)."},
             "trial_type": {"LongName": "Event category", 
-                        "Description": "Indicator of type of task action that occurs at the marked time", 
+                        "Description": "Indicator of type of task action that occurs at the marked time.", 
                         "Levels": {k:descriptions[k] for k in self.events["trial_type"].unique()}},
             "response_time": {"Description": "Time (in seconds) between onset of recall phase and recall (for recalls and vocalizations), or between onset of problem on screen and response (for math problems)."},
             "stim_file": {"LongName": "Stimulus File", 
                           "Description": "Location of wordpool file containing words presented in WORD events."},
             "item_name": {"Description": "The word being presented or recalled in a WORD or REC_WORD event."},
             'serialpos': {'LongName': 'Serial Position', 
-                          'Description': 'The order position of a word presented in an WORD event.'},
+                          'Description': 'The order position (at encoding) of a word presented in an WORD event or a recall in a REC_WORD event.'},
+            "recalled": {"Description": "For WORD events, denotes if presented word is recalled.  For REC_WORD events, denotes if recall is correct."},
             "list": {"LongName": "List Number",
                      "Description": "Word list (1-25) during which the event occurred. Trial = -1 indicates practice list."},
             'test': {"LongName": "Math problem", 
