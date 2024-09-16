@@ -53,7 +53,7 @@ class catFR2_BIDS_converter(intracranial_BIDS_converter):
         events = events.replace('', 'n/a')
 
         # select and re-order columns
-        events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name', 'category'
+        events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name', 'category',
                          'serialpos', 'list', 'test', 'answer', 'stimulation', 'stim_list', 'stim_duration', 'anode_label', 'cathode_label',
                          'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width', 'experiment', 'session', 'subject']]
         
