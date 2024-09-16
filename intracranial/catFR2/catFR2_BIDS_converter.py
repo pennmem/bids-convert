@@ -144,7 +144,7 @@ class catFR2_BIDS_converter(intracranial_BIDS_converter):
             "item_name": {"Description": "The word being presented or recalled in a WORD or REC_WORD event."},
             "category": {"Description": "Semantic category of word presented or recalled in a WORD or REC_WORD event."},
             'serialpos': {'LongName': 'Serial Position', 
-                          'Description': 'The order position of a word presented in an WORD event or a recall in a REC_WORD event.'},
+                          'Description': 'The order position (at encoding) of a word presented in an WORD event or a recall in a REC_WORD event.'},
             "list": {"LongName": "List Number",
                      "Description": "Word list (1-25) during which the event occurred. Trial = -1 indicates practice list."},
             'test': {"LongName": "Math problem", 
