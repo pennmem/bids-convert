@@ -45,7 +45,7 @@ class catFR2_BIDS_converter(intracranial_BIDS_converter):
                    (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0       # use rectime
         events['stim_file'] = np.where(events.trial_type=='WORD', self.wordpool_file, 'n/a')        # add wordpool to word events
         events.loc[events.answer==-999, 'answer'] = 'n/a'                                           # non-math events no answer
-        events.loc[(events['type'].isin(['START', 'PROB', 'STOP'])) & 
+        events.loc[(events['trial_type'].isin(['START', 'PROB', 'STOP'])) & 
                    (events['recalled'] == -999), 'recalled'] = 0                                    # math events have recalled = -999
         events['item_name'] = events.item_name.replace('X', 'n/a')
         events['category'] = events.category.replace('X', 'n/a')
