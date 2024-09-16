@@ -39,9 +39,10 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV'),
                    'response_time'] = events['rectime'] / 1000.0
         events['stim_file'] = np.where(events.trial_type=='WORD', self.wordpool_file, 'n/a')         # add wordpool to word events
+        events = self.apply_recall_status(events)                                                    # add recalled status to recalls (all 0)
         
         events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name',
-                         'serialpos', 'repeats', 'list', 'experiment', 'session', 'subject']]        # select and re-order columns
+                         'serialpos', 'repeats', 'recalled', 'list', 'experiment', 'session', 'subject']]        # select and re-order columns
         events = events.fillna('n/a')
         events = events.replace('', 'n/a')
 
@@ -72,6 +73,20 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
         events['duration'] = durations           # preserves column order
         return events
 
+    # assign recalled status to recall events
+    def apply_recall_status(events):
+        recalled = []
+        for _, l_evs in events.groupby('list', sort=False):      # preserve order
+            w_evs = l_evs.query("type == 'WORD'")
+            r_evs = l_evs.query("type == 'REC_WORD'")
+            
+            words = np.array(w_evs.item_name)
+            recs = np.array(r_evs.item_name)
+            
+            recalled.extend([1 if r in words else 0 for r in recs])
+            
+        events.loc[events['type'] == 'REC_WORD', 'recalled'] = recalled
+        return events
 
     def make_events_descriptor(self):
         descriptions = {
@@ -106,7 +121,8 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
             "item_name": {"Description": "The word being presented or recalled in a WORD or REC_WORD event."},
             'serialpos': {'LongName': 'Serial Position', 
                           'Description': 'The order position of a word presented in an WORD event.'},
-            "repeats": {"Description": "Number of repetitions within the list of a word presented in a WORD event."}
+            "repeats": {"Description": "Number of repetitions within the list of a word presented in a WORD event."},
+            "recalled": {"Description": "For WORD events, denotes if presented word is recalled.  For REC_WORD events, denotes if recall is correct."}
         }
         events_descriptor = {k:HED[k] for k in HED if k in self.events.columns}
         return events_descriptor

@@ -45,7 +45,7 @@ class FR2_BIDS_converter(intracranial_BIDS_converter):
         events['stim_file'] = np.where((events.trial_type=='WORD') & (events.list!=-1), self.wordpool_file, 'n/a')    # add wordpool to word events
         events.loc[events.answer==-999, 'answer'] = 'n/a'                                              # non-math events no answer
         events.loc[(events['trial_type'].isin(['START', 'PROB', 'STOP'])) & 
-                   (events['recalled'] == -999), 'recalled'] = 0                                    # math events have recalled = -999
+                   (events['recalled'] == -999), 'recalled'] = 0                                       # math events have recalled = -999
         events['item_name'] = events.item_name.replace('X', 'n/a')
         events.loc[events.trial_type=='PRACTICE_WORD', 'serialpos'] = events['serialpos'] + 1          # practice words wrongly given serial positions 0-11 (all sessions have practice words)
         events = self.assign_serial_positions(events)                                                  # assign serial positions to recalls
