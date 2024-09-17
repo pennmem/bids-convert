@@ -174,3 +174,14 @@ class PAL2_BIDS_converter(intracranial_BIDS_converter):
             "subject": {"LongName": "Subject ID",
                         "Description": "The string identifier of the subject, e.g. R1001P."},
         }
+        events_descriptor = {k:HED[k] for k in HED if k in self.events.columns}
+        return events_descriptor
+    
+    # ---------- EEG ----------
+    def eeg_sidecar(self, ref):
+        sidecar = super().eeg_sidecar(ref)
+        sidecar = pd.DataFrame(sidecar, index=[0])
+        sidecar.insert(1, 'TaskDescription', 'cued recall of paired associates with open-loop stimulation at encoding or retrieval')
+        sidecar = sidecar.to_dict(orient='records')[0]
+        sidecar['ElectricalStimulation'] = True
+        return sidecar
