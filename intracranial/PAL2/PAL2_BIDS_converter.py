@@ -23,7 +23,7 @@ class PAL2_BIDS_converter(intracranial_BIDS_converter):
         word_evs = evs[evs['type'] == 'STUDY_PAIR']
         if all([x in self.wordpool_EN for x in word_evs.study_1]) and all([x in self.wordpool_EN for x in word_evs.study_2]):
             wordpool_file = 'wordpools/wordpool_EN.txt'
-        elif all([x in self.wordpool_SP for x in word_evs.study_1]) and all([x in self.wordpool_EN for x in word_evs.study_2]):
+        elif all([x in self.wordpool_SP for x in word_evs.study_1]) and all([x in self.wordpool_SP for x in word_evs.study_2]):
             wordpool_file = 'wordpools/wordpool_SP.txt'
         else:
             wordpool_file = 'n/a'
