@@ -47,6 +47,8 @@ class PAL2_BIDS_converter(intracranial_BIDS_converter):
         events['stim_file'] = np.where((events.trial_type.isin(['STUDY_PAIR', 'TEST_PROBE']))
                                         & (events.list>0), self.wordpool_file, 'n/a')           # add wordpool to word events
         events.loc[events.answer==-999, 'answer'] = 'n/a'                                       # non-math events no answer
+        events.loc[events.stimulation == 0, ['anode_label', 'cathode_label']] = ''              # set stim parameters to defaults if no stimulation
+        events.loc[events.stimulation == 0, ['stim_duration', 'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width']] = 0
 
         events = events.fillna('n/a')                  # change NaN to 'n/a'
         events = events.replace('', 'n/a')             # no empty cells
@@ -156,7 +158,7 @@ class PAL2_BIDS_converter(intracranial_BIDS_converter):
                        "Description": "Participant answer to problem with form X + Y + Z = ?  Note this is not necessarily the correct answer."},
             "stimulation": {"Description": "Denotes if event occurs during electrical stimulation.  1 indicates stimulation on."},
             "stim_list": {"LongName": "Stimulation List",
-                          "Description": "Denotes lists with electrical stimulation during encoding."},
+                          "Description": "Denotes lists with electrical stimulation during encoding or retrieval."},
             "stim_duration": {"LongName": "Stimulation Duration",
                               "Description": "Duration (in milliseconds) of electrical stimulation."},
             "anode_label": {"Description": "Anode electrode label."},
