@@ -12,9 +12,8 @@ class PAL2_BIDS_converter(intracranial_BIDS_converter):
     wordpool_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/PAL2/wordpools/wordpool_EN.txt', dtype=str)
     wordpool_SP = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/PAL2/wordpools/wordpool_SP.txt', dtype=str)
     
-
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/PAL2'):
+    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/PAL2/'):
         super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
 
     # ---------- Events ----------
