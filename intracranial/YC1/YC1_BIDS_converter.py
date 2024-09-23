@@ -65,7 +65,7 @@ class YC1_BIDS_converter(intracranial_BIDS_converter):
         events['duration'] = durations
         return events
     
-    def apply_data_to_path(row, slope):
+    def apply_data_to_path(self, row, slope):
         path = pd.DataFrame(row.path)      # extract path data
         trial_type = row['type']
         
