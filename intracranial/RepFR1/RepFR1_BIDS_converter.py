@@ -40,11 +40,11 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
                    'response_time'] = events['rectime'] / 1000.0
         events['stim_file'] = np.where(events.trial_type=='WORD', self.wordpool_file, 'n/a')         # add wordpool to word events
         events = self.apply_recall_status(events)                                                    # add recalled status to recalls (all 0)
+        events = events.fillna('n/a')
+        events = events.replace('', 'n/a')
         
         events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name',
                          'serialpos', 'repeats', 'recalled', 'list', 'experiment', 'session', 'subject']]        # select and re-order columns
-        events = events.fillna('n/a')
-        events = events.replace('', 'n/a')
 
         return events
         
@@ -107,7 +107,7 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
             "duration": {"Description": "Duration (in seconds) of the event, measured from the onset of the event."},
             "sample": {"Description": "Onset of the event according to the sampling scheme (frequency)."},
             "trial_type": {"LongName": "Event category", 
-                           "Description": "Indicator of type of task action that occurs at the marked time", 
+                           "Description": "Indicator of type of task action that occurs at the marked time.", 
                            "Levels": {k:descriptions[k] for k in self.events["trial_type"].unique()}},
             "response_time": {"Description": "Time (in seconds) between onset of recall phase and recall (for recalls and vocalizations), or between onset of problem on screen and response (for math problems)."},
             "stim_file": {"LongName": "Stimulus File", 
