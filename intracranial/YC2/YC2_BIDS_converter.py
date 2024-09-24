@@ -43,7 +43,6 @@ class YC2_BIDS_converter(intracranial_BIDS_converter):
                     'response_time'] = events['resp_total_time']
         events['stim_file'] = np.where(events.trial_type.isin(['NAV_PRACTICE_LEARN', 'NAV_LEARN']), 
                                        self.wordpool_file, 'n/a')                               # add wordpool to learning events
-        print(events.stimulation.unique())
         events['stimulation'] = events['stimulation'].astype(int)                               # True = 1, False = 0
         events.loc[events.stimulation == 0, ['anode_label', 'cathode_label']] = ''              # set stim parameters to defaults if no stimulation
         events.loc[events.stimulation == 0, ['stim_duration', 'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width']] = 0
@@ -134,11 +133,14 @@ class YC2_BIDS_converter(intracranial_BIDS_converter):
         row['y'] = path.iloc[0].y
 
         # stimulation parameters
+        path['stim_on'] = row.stim_on
+        path['stim_duration'] = row.stim_duration
+        path['anode_label'] = row.anode_label
+        path['cathode_label'] = row.cathode_label
         path['amplitude'] = row.amplitude
         path['pulse_freq'] = row.pulse_freq
         path['n_pulses'] = row.n_pulses
         path['pulse_width'] = row.pulse_width
-        path['stim_duration'] = row.stim_duration
         
         return pd.concat([row.to_frame().T, path], ignore_index=True)
     
