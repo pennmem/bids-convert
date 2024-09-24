@@ -81,7 +81,7 @@ class YC2_BIDS_converter(intracranial_BIDS_converter):
             stim_params = pd.DataFrame.from_dict(row.stim_params)   # dictionary already in list
             
             # no stimulation on test trials
-            if row.type.isin(["NAV_TEST", "NAV_PRACTICE_TEST"]):
+            if row['type'] in ["NAV_TEST", "NAV_PRACTICE_TEST"]:
                 stim_params['stim_on'] = False
 
             stim_params_df = pd.concat([stim_params_df, stim_params], ignore_index=True)
