@@ -22,11 +22,11 @@ class pyFR_BIDS_metadata(intracranial_BIDS_metadata):
             reader = cml.CMLReader(subject=row.subject, experiment=row.experiment, session=row.session,
                                 localization=row.localization, montage=row.montage)
             
-            # load in behavioral events
+            # load in behavioral events (now loads math events automatically)
             events_bool = self._load_events(reader)
 
-            # load in math events
-            math_bool = self._load_math(reader)
+            # math events (still want toggle)
+            math_bool = self._load_math(reader, events_bool)
 
             # load in contacts, tal coordinates
             contacts_bool, tal = self._load_contacts(reader)
@@ -64,16 +64,14 @@ class pyFR_BIDS_metadata(intracranial_BIDS_metadata):
             
         return metadata_df
     
-    def _load_math(self, reader):
-        try:
-            if reader.montage != 0:
-                math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{reader.subject}_{reader.montage}_math.mat', squeeze_me=True)['events'])
-            else:
-                math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{reader.subject}_math.mat', squeeze_me=True)['events'])
-
-            math_evs = math_evs[math_evs.session == reader.session]                                        # select out session
-            return len(math_evs) > 0
-        except BaseException as e:
+    def _load_math(self, reader, events_bool):
+        if events_bool:
+            try:
+                evs = reader.load('events')
+                return 'PROB' in evs['type'].unique()
+            except BaseException as e:
+                return False
+        else:
             return False
 
     def _load_contacts(self, reader):
@@ -101,41 +99,15 @@ class pyFR_BIDS_metadata(intracranial_BIDS_metadata):
         except BaseException as e:
             return False
         
-    def _n_eegfiles(self, reader, events_bool, math_bool):
-        if events_bool and math_bool:
+    def _n_eegfiles(self, reader, events_bool):
+        if events_bool:
             events = reader.load('events')
-            if reader.montage != 0:
-                math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{reader.subject}_{reader.montage}_math.mat', squeeze_me=True)['events'])
-            else:
-                math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{reader.subject}_math.mat', squeeze_me=True)['events'])
-                
-            math_evs = math_evs[math_evs.session == reader.session]
+            try:
+                eegfiles = [x.split('/')[-1] for x in events['eegfile'].unique() if x != '']      # only consider final path name
+                return len(np.unique(eegfiles))                                                   # some files just have different /dataX/eeg
+            except BaseException as e:
+                return -1
             
-            all_evs = pd.concat([events, math_evs], ignore_index=True)
-            try:
-                eegfiles = [x for x in all_evs['eegfile'].unique() if x != '']
-                return len(eegfiles)
-            except BaseException as e:
-                return -1
-        elif events_bool:
-            events = reader.load('events')
-            try:
-                eegfiles = [x for x in events['eegfile'].unique() if x != '']
-                return len(eegfiles)
-            except BaseException as e:
-                return -1
-        elif math_bool:
-            if reader.montage != 0:
-                math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{reader.subject}_{reader.montage}_math.mat', squeeze_me=True)['events'])
-            else:
-                math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{reader.subject}_math.mat', squeeze_me=True)['events'])
-                
-            math_evs = math_evs[math_evs.session == reader.session]
-            try:
-                eegfiles = [x for x in math_evs['eegfile'].unique() if x != '']
-                return len(eegfiles)
-            except BaseException as e:
-                return -1
         else:
             return -1
         

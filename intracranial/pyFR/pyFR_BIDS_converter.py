@@ -71,20 +71,8 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
     
     def events_to_BIDS(self):
-        events = self.reader.load('events')
-        # load in math events
-        if self.math_events:
-            if self.montage != 0:
-                math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{self.subject}_{self.montage}_math.mat', squeeze_me=True)['events'])
-            else:
-                math_evs = pd.DataFrame(scipy.io.loadmat(f'/data/events/pyFR/{self.subject}_math.mat', squeeze_me=True)['events'])
-            math_evs = math_evs[math_evs.session == self.session]                                        # select out session
-            math_evs = math_evs[(math_evs.type != 'B') & (math_evs.type != 'E')]                         # remove the B and E events from math evs
-            math_evs['list'] = math_evs['list'] - 1                                                      # math events given list + 1
-            events = pd.concat([math_evs, events], ignore_index=True)
-            events = events.sort_values(by='mstime', ascending=True, ignore_index=True)                  # sort in chronological order
-        
-        events['experiment'] = self.experiment                                                       # math events don't have experiment field
+        events = self.reader.load('events')     # cmlreaders now loads in math events automatically
+
         # transformations
         events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type'})                  # rename columns
         events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0        # event duration [s]
@@ -95,7 +83,8 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV') |
                    (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0
         events['stim_file'] = np.where(events.trial_type=='WORD', self.wordpool_file, 'n/a')              # add wordpool to word events
-        events['item_name'] = events.item.replace('X', 'n/a')
+        events['item_name'] = events['item'].replace('X', 'n/a')
+        events = self.assign_serial_positions(events)                                                # assign serail positions to recalls
         events = events.fillna('n/a')                                                                # chnage NaN to 'n/a'
         events = events.replace('', 'n/a')                                                           # no empty cells
 
@@ -133,6 +122,24 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         events['duration'] = durations        # preserves column order
         return events
     
+    # assign serial positions to recall events (all given serial position = -999)
+    def assign_serial_positions(self, events):
+        serialpos = []
+        for l, l_evs in events.groupby('list', sort=False):         # preserve order
+            w_evs = l_evs.query("trial_type == 'WORD'")
+            r_evs = l_evs.query("trial_type == 'REC_WORD'")
+            
+            # recall events all given default serial position == -999 or 0
+            
+            words = np.array(w_evs.item_name)
+            recs = np.array(r_evs.item_name)
+            sp = [np.argwhere(words == r)[0][0] + 1 if r in words else -999 for r in recs]
+
+            serialpos.extend(sp)
+
+        events.loc[events['trial_type'] == 'REC_WORD', 'serialpos'] = serialpos
+        return events
+    
     def make_events_descriptor(self):
         descriptions = {
             'B': 'Beginning of session.',
@@ -167,7 +174,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
                      "Description": "Word list (1-24) during which the event occurred. Trial <= 0 indicates practice list."},
             "item_name": {"Description": "The word being presented or recalled in a WORD or REC_WORD event."},
             'serialpos': {'LongName': 'Serial Position', 
-                          'Description': 'The order position of a word presented in an WORD event.'},
+                          'Description': 'The order position (at encoding) of a word presented in an WORD event or a recall in a REC_WORD event.'},
             'test': {"LongName": "Math problem", 
                      "Description": "Math problem with form X + Y + Z = ?  Stored in list [X, Y, Z]."},
             'answer': {"LongName": "Math problem response", 
