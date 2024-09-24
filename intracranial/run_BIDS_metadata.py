@@ -1,8 +1,7 @@
 ### script to run BIDS metadata
 
 # imports
-from intracranial_BIDS_metadata import intracranial_BIDS_metadata
-from pyFR.pyFR_BIDS_metadata import pyFR_BIDS_metadata
+from intracranial_BIDS_metadata import intracranial_BIDS_metadata, pyFR_BIDS_metadata
 import sys
 
 exp = sys.argv[1]
