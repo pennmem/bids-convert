@@ -9,7 +9,7 @@ import mne_bids
 import scipy.stats
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
-class YC1_BIDS_converter(intracranial_BIDS_converter):
+class YC2_BIDS_converter(intracranial_BIDS_converter):
     wordpool = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/YC2/wordpools/wordpool.txt', dtype=str)
 
     # initialize
