@@ -38,7 +38,7 @@ class pyFR_BIDS_metadata(intracranial_BIDS_metadata):
             pairs_bool, max_label_len = self._load_pairs(reader)
 
             # number of EEG files
-            eegfiles = self._n_eegfiles(reader, events_bool, math_bool)
+            eegfiles = self._n_eegfiles(reader, events_bool)
 
             # load in monopolar EEG
             if contacts_bool:
