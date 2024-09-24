@@ -56,7 +56,7 @@ class YC2_BIDS_converter(intracranial_BIDS_converter):
                          'stimulation', 'stim_duration', 'anode_label', 'cathode_label', 'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width',
                          'session', 'experiment', 'subject']]
 
-        raise NotImplementedError
+        return events
     
     def apply_event_durations(self, events):
         durations = []
