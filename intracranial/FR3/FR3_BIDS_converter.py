@@ -29,9 +29,9 @@ class FR3_BIDS_converter(intracranial_BIDS_converter):
     
     def events_to_BIDS(self):
         events = self.reader.load('events')
-        events = events[events.mstime != -1]               # drop events with no mstime values
-        events = self.unpack_stim_params(events)           # convert stimulation parameters to columns
-        events = self.assign_stim_lists(events)            # assign stim_list values for math events
+        events = events[events.mstime != -1].reset_index(drop=True)                                    # drop events with no mstime values
+        events = self.unpack_stim_params(events)                                                       # convert stimulation parameters to columns
+        events = self.assign_stim_lists(events)                                                        # assign stim_list values for math events
 
         events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type', 'stim_on':'stimulation'})     # rename columns
         events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                             # onset from first event [s]
