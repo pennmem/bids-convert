@@ -58,6 +58,40 @@ class FR5_BIDS_converter(intracranial_BIDS_converter):
 
         return events
     
+    def apply_event_durations(events):
+        durations = []
+        for _, row in events.iterrows():
+            # fixation events
+            if False:
+                pass
+
+            # countdown events
+
+
+            # word presentation events
+
+
+            # stimulation events
+
+            # keep current durations
+            else:
+                durations.append(row.duration)
+
+        events['duration'] = durations
+        return events
+        
+
+    # assign stim_list values to math events with default -999
+    def assign_stim_lists(self, events):
+        stim_list = []
+        for _, row in events.iterrows():
+            if row['stim_list'] == -999:
+                stim_list.append(max(events[events['list'] == row['list']].stim_list))
+            else:
+                stim_list.append(row.stim_list)
+        
+        events['stim_list'] = stim_list
+        return events
 
     # ---------- EEG ----------
     def eeg_sidecar(self, ref):

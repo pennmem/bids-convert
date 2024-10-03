@@ -50,7 +50,7 @@ class catFR2_BIDS_converter(intracranial_BIDS_converter):
         events['item_name'] = events.item_name.replace('X', 'n/a')
         events['category'] = events.category.replace('X', 'n/a')
         events.loc[events.trial_type=='PRACTICE_WORD', 'list'] = -1                                 # practice words given list = -999
-        events.loc[events.trial_type=='PRACTICE_WORD', 'list'] = range(1, len(events.query("trial_type=='PRACTICE_WORD'")) + 1)   # practice words given serial position = -999
+        events.loc[events.trial_type=='PRACTICE_WORD', 'serialpos'] = range(1, len(events.query("trial_type=='PRACTICE_WORD'")) + 1)   # practice words given serial position = -999
         events = events.fillna('n/a')                                                               # change NaN to 'n/a'
         events = events.replace('', 'n/a')
 
