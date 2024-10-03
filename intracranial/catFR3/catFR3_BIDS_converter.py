@@ -88,7 +88,7 @@ class catFR3_BIDS_converter(intracranial_BIDS_converter):
                 durations.append(row.duration)
 
         events['duration'] = durations
-        return durations
+        return events
     
     # unpack stimulation parameters from dictionary and add as columns to events dataframe
     def unpack_stim_params(self, events):
