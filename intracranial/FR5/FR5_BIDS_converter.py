@@ -25,3 +25,16 @@ class FR5_BIDS_converter(intracranial_BIDS_converter):
 
     def events_to_BIDS(self):
         events = self.reader.load('events')
+
+
+        raise NotImplementedError
+    
+
+    # ---------- EEG ----------
+    def eeg_sidecar(self, ref):
+        sidecar = super().eeg_sidecar(ref)
+        sidecar = pd.DataFrame(sidecar, index=[0])
+        sidecar.insert(1, 'TaskDescription', 'free recall with closed-loop stimulation at encoding and retrieval')     # place in second column
+        sidecar = sidecar.to_dict(orient='records')[0]
+        sidecar['ElectricalStimulation'] = True
+        return sidecar
