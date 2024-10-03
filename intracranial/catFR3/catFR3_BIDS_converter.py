@@ -8,7 +8,7 @@ import os
 import mne_bids
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
-class FR3_BIDS_converter(intracranial_BIDS_converter):
+class catFR3_BIDS_converter(intracranial_BIDS_converter):
     wordpool = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/catFR3/wordpools/wordpool.txt', dtype=str)
 
     # initialize
