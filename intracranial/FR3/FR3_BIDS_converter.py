@@ -93,7 +93,7 @@ class FR3_BIDS_converter(intracranial_BIDS_converter):
     
 
     # assign serial positions to recall events if all given serial position = -999
-    def assign_serial_positons(self, events):
+    def assign_serial_positions(self, events):
         serialpos = []
         for l, l_evs in events.groupby('list', sort=False):     # preserve order
             w_evs = l_evs.query("trial_type == 'WORD")
