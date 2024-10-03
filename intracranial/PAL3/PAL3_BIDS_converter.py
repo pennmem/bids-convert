@@ -33,6 +33,8 @@ class PAL3_BIDS_converter(intracranial_BIDS_converter):
         events = self.unpack_stim_params(events)                                       # convert stimulation parameters to columns
         events['stim_duration'] = events['stim_duration'].replace([480, 490], 500)     # fix incorrect stim durations
 
+        events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type', 'stim_on':'stimulation'})      # rename columns
+
         return events
     
     # unpack stimulation parameters from dictionary and add as columns to events dataframe
