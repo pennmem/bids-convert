@@ -76,11 +76,9 @@ class FR3_BIDS_converter(intracranial_BIDS_converter):
             elif row.trial_type == 'COUNTDOWN' or row.trial_type == 'COUNTDOWN_START':
                 durations.append(10.0)
 
-
             # word presentation events = 1600 ms
             elif row.trial_type == 'WORD' or row.trial_type == 'PRACTICE_WORD':
                 durations.append(1.6)
-
 
             # stimulation events = 500 / 500 ms
             elif row.trial_type == 'STIM_ON':
@@ -89,7 +87,6 @@ class FR3_BIDS_converter(intracranial_BIDS_converter):
             # keep current durations
             else:
                 durations.append(row.duration)
-
 
         events['duration'] = durations        # preserves column order
         return events
@@ -119,7 +116,7 @@ class FR3_BIDS_converter(intracranial_BIDS_converter):
     
 
     # unpack stimulation parameters from dictionary and add as columns to events dataframe
-    def unpack_stim_params(events):
+    def unpack_stim_params(self, events):
         stim_params_df = pd.DataFrame()
         for _, row in events.iterrows():
             stim_params = pd.DataFrame.from_dict([row.stim_params])
