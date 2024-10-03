@@ -56,7 +56,8 @@ class FR3_BIDS_converter(intracranial_BIDS_converter):
         # select and re-order columns
         events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name',
                          'serialpos', 'recalled', 'list', 'test', 'answer', 'stimulation', 'stim_list', 'stim_duration',
-                         'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width', 'experiment', 'session', 'subject']]
+                         'anode_label', 'cathode_label', 'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width', 
+                         'experiment', 'session', 'subject']]
 
         return events
     
