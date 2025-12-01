@@ -207,6 +207,20 @@ class ScalpBIDSConverter:
             "COUNTDOWN": "Initiate countdown before encoding.",
             "BREAK_START": "Start mid-session break to rewet scalp cap.",
             "BREAK_STOP": "Stop mid-session break to rewet scalp cap.",
+                # ---------------- ValueCourier-specific trial types ----------------
+            "store mappings": "Display or logging of store-to-location/value mappings in the task.",
+            "VIDEO_START": "Start of instructional or task-related video.",
+            "VIDEO_STOP": "End of instructional or task-related video.",
+            "TL_START": "Start of a temporal-learning or timeline block.",
+            "TL_END": "End of a temporal-learning or timeline block.",
+            "PRACTICE_DELIVERY_START": "Start of a practice delivery trial in the task.",
+            "PRACTICE_DELIVERY_END": "End of a practice delivery trial in the task.",
+            "PRACTICE_VALUE_RECALL": "Value recall response during a practice trial.",
+            "POINTER_ON": "Onset of the pointing/selection cursor during navigation or choice.",
+            "TRIAL_START": "Start of a trial.",
+            "TRIAL_END": "End of a trial.",
+            "VALUE_RECALL": "Subject’s value recall response for the current list or item.",
+            "FINAL_COMPENSATION": "Event marking display and computation of final monetary compensation.",
         }
         HED = {
             "onset": {
