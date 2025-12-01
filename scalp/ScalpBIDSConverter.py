@@ -22,8 +22,13 @@ class ScalpBIDSConverter:
                   'resp', 'answer', 'test_x', 'test_y', 'test_z', 'color_r', 'color_g', 'color_b', 'case', 'font'],
         "ltpFR2": ['subject', 'experiment', 'session', 'trial', 'item_name', 'item_num',
                    'list', 'answer', 'test_x', 'test_y', 'test_z'],
-        "VFFR": ['subject', 'experiment', 'session', 'trial', 'item_name', 'item_num', 'too_fast']
+        "VFFR": ['subject', 'experiment', 'session', 'trial', 'item_name', 'item_num', 'too_fast'],
+        "ValueCourier": ['subject', 'experiment', 'session', 'trial', 'task', 'item', 'itemno', 'itemvalue', 'actualvalue',
+                         'compensaition', 'intruded', 'intrusion', 'multiplier', 'numingroupchosen','playerrotY', 'presX', 
+                         'presZ', 'primacybuf', 'recalled', 'recencybuf','serialpos', 'store','storeX', 'storeZ', 'storepointtype', 
+                         'valuerecall'],
     }
+    # eegoffset,correctPointingDirection, eegfile, eogArtifact, finalrecalled, montage, msoffset, mstime, phase, protocol, submittedPointingDirection, type
     def __init__(self, subject, experiment, session, root="/scratch/PEERS_BIDS/",
                  overwrite_eeg=True, overwrite_beh=True):
         self.root = root
@@ -132,6 +137,8 @@ class ScalpBIDSConverter:
                 self.wordpool_file = "wordpools/wasnorm_wordpool_less_exclusions.txt"
         elif np.isin(self.experiment, ["ltpFR2", "VFFR"]):
             self.wordpool_file = "wordpools/wasnorm_wordpool_576.txt"
+        elif np.isin(self.experiment, ["ValueCourier"]):
+            self.wordpool_file = "wordpools/valuecourier_wordpool.txt"
         else:
             raise Exception("Wordpool not known for this experiment.")
     
@@ -292,7 +299,93 @@ class ScalpBIDSConverter:
             'too_fast':{
                 "LongName": "'Too fast' message displayed",
                 "Description": "Subject recalled word too quickly, warning displayed on screen."
-            }
+            },
+            
+            # ---- ValueCourier-specific fields ----
+            'item': {
+                "LongName": "Item string",
+                "Description": "The item identifier (often the string name of the object/value being judged)."
+            },
+            'itemno': {
+                "LongName": "Item number",
+                "Description": "Numeric ID for the item within the ValueCourier item set."
+            },
+            'itemvalue': {
+                "LongName": "Displayed item value",
+                "Description": "Point or monetary value displayed for the item on that trial."
+            },
+            'actualvalue': {
+                "LongName": "True average tip value",
+                "Description": "True average tip value of items in a delivery day"
+            },
+            'compensaition': {
+                "LongName": "Compensation",
+                "Description": "Compensation to participant at the end of the session."
+            },
+            'intruded': {
+                "LongName": "Intruded flag",
+                "Description": "1 if the response was an intrusion relative to the current list/context, 0 otherwise."
+            },
+            'intrusion': {
+                "LongName": "Intrusion item number",
+                "Description": "Identifier of the intruded item when an intrusion occurs, -1 otherwise."
+            },
+            'multiplier': {
+                "LongName": "Value multiplier",
+                "Description": "Multiplicative factor applied to the max tip value (10$) which is used to calculate compensation."
+            },
+            'numingroupchosen': {
+                "LongName": "Number in group chosen",
+                "Description": "In temporal value association condition, the list of items is split in half and the each half has a high or low value. Number in group chosen describes the number of high items are in the high side of the list and vice versa for the low side."
+            },
+            'playerrotY': {
+                "LongName": "Player rotation (Y axis)",
+                "Description": "Rotation angle of the player avatar around the Y axis in the virtual environment."
+            },
+            'presX': {
+                "LongName": "Presentation X coordinate",
+                "Description": "X coordinate of the item at presentation in the virtual environment."
+            },
+            'presZ': {
+                "LongName": "Presentation Z coordinate",
+                "Description": "Z coordinate of the item at presentation in the virtual environment."
+            },
+            'primacybuf': {
+                "LongName": "Primacy buffer length",
+                "Description": "Length of the buffer in the beginning of the item list during the temporal association condition which is not split into halves."
+            },
+            'recencybuf': {
+                "LongName": "Recency buffer length",
+                "Description": "Length of the buffer at the end of the item list during the temporal association condition which is not split into halves."
+            },
+            'recalled': {
+                "LongName": "Recalled flag",
+                "Description": "1 if the item was successfully recalled, 0 otherwise."
+            },
+            'serialpos': {
+                "LongName": "Serial position",
+                "Description": "Serial position of the item within the list."
+            },
+            'store': {
+                "LongName": "Store identifier",
+                "Description": "Identifier of the store/location in the ValueCourier environment where the item is presented."
+            },
+            'storeX': {
+                "LongName": "Store X coordinate",
+                "Description": "X coordinate of the store in the virtual environment."
+            },
+            'storeZ': {
+                "LongName": "Store Z coordinate",
+                "Description": "Z coordinate of the store in the virtual environment."
+            },
+            'storepointtype': {
+                "LongName": "Store point type",
+                "Description": "Type of point or reward structure associated with the store."
+            },
+            'valuerecall': {
+                "LongName": "Value recall response",
+                "Description": "Subject’s recalled value or judgment about the average list value."
+            },
         }
         self.events_descriptor = {k:HED[k] for k in HED if k in self.events.columns}
         
@@ -302,10 +395,11 @@ class ScalpBIDSConverter:
         pass
     
     def write_bids_beh(self, overwrite=True):
+        task_name = self.experiment.lower() 
         # events = self.load_events(beh_only=True)
         bids_path = mne_bids.BIDSPath(subject=self.subject,
                                           session=str(self.session),
-                                          task=self.experiment,
+                                          task=task_name,
                                           datatype="beh",
                                           suffix="beh",
                                           extension=".tsv",
@@ -316,9 +410,10 @@ class ScalpBIDSConverter:
             json.dump(fp=f, obj = self.events_descriptor)
     
     def write_bids_eeg(self, temp_path="temp.edf", overwrite=True):
+        task_name = self.experiment.lower() 
         bids_path = mne_bids.BIDSPath(subject=self.subject,
                                           session=str(self.session),
-                                          task=self.experiment,
+                                          task=task_name,
                                           datatype="eeg",
                                           root=self.root)
         try:
