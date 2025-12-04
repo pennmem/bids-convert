@@ -278,7 +278,7 @@ class ScalpBIDSConverter:
             "trial_type": {
                 "LongName": "Event category",
                 "Description": "Indicator of type of task action that occurs at the marked time",
-                "Levels": {k:descriptions[k] for k in self.events["type"].unique()},
+                "Levels": {k:descriptions[k] for k in self.events["trial_type"].unique()},
             },
             "item_name": {
                 "Description": "The word being presented or recalled in a WORD or REC_WORD event."
