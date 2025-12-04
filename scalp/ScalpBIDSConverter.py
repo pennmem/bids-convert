@@ -491,7 +491,7 @@ class ScalpBIDSConverter:
         os.makedirs(bids_path.directory, exist_ok=True)
         self.events.to_csv(bids_path.fpath, sep="\t", index=False)
         with open(bids_path.update(suffix="beh", extension=".json").fpath, "w") as f:
-            json.dump(fp=f, obj = self.events_desaacriptor)
+            json.dump(fp=f, obj = self.events_descriptor)
     
     def write_bids_eeg(self, temp_path="temp.edf", overwrite=True):
         task_name = self.experiment.lower() 
