@@ -23,10 +23,47 @@ class ScalpBIDSConverter:
         "ltpFR2": ['subject', 'experiment', 'session', 'trial', 'item_name', 'item_num',
                    'list', 'answer', 'test_x', 'test_y', 'test_z'],
         "VFFR": ['subject', 'experiment', 'session', 'trial', 'item_name', 'item_num', 'too_fast'],
-        "ValueCourier": ['subject', 'experiment', 'session', 'trial', 'task', 'item', 'itemno', 'itemvalue', 'actualvalue',
-                         'compensaition', 'intruded', 'intrusion', 'multiplier', 'numingroupchosen','playerrotY', 'presX', 
-                         'presZ', 'primacybuf', 'recalled', 'recencybuf','serialpos', 'store','storeX', 'storeZ', 'storepointtype', 
-                         'valuerecall'],
+    #     "ValueCourier": ['subject', 'experiment', 'session', 'trial', 'task', 'item', 'itemno', 'itemvalue', 'actualvalue',
+    #                      'compensation', 'intruded', 'intrusion', 'multiplier', 'numingroupchosen','playerrotY', 'presX', 
+    #                      'presZ', 'primacybuf', 'recalled', 'recencybuf','serialpos', 'store','storeX', 'storeZ', 'storepointtype', 
+    #                      'valuerecall'],
+        "ValueCourier": [
+            'actualvalue',
+            'compensation',
+            'eegfile',
+            'eegoffset',
+            'eogArtifact',
+            'experiment',
+            'intruded',
+            'intrusion',
+            'item',
+            'itemno',
+            'itemvalue',
+            'montage',
+            'msoffset',
+            # 'mstime',
+            'multiplier',
+            'numingroupchosen',
+            'phase',
+            'playerrotY',
+            'presX',
+            'presZ',
+            'primacybuf',
+            'protocol',
+            'recalled',
+            'rectime',
+            'recencybuf',
+            'serialpos',
+            'session',
+            'store',
+            'storeX',
+            'storeZ',
+            'storepointtype',
+            'subject',
+            'task',
+            'trial',
+            'valuerecall',
+        ]
     }
     # eegoffset,correctPointingDirection, eegfile, eogArtifact, finalrecalled, montage, msoffset, mstime, phase, protocol, submittedPointingDirection, type
     def __init__(self, subject, experiment, session, root="/scratch/PEERS_BIDS/",
@@ -241,7 +278,7 @@ class ScalpBIDSConverter:
             "trial_type": {
                 "LongName": "Event category",
                 "Description": "Indicator of type of task action that occurs at the marked time",
-                "Levels": {k:descriptions[k] for k in self.events["trial_type"].unique()},
+                "Levels": {k:descriptions[k] for k in self.events["type"].unique()},
             },
             "item_name": {
                 "Description": "The word being presented or recalled in a WORD or REC_WORD event."
@@ -332,7 +369,7 @@ class ScalpBIDSConverter:
                 "LongName": "True average tip value",
                 "Description": "True average tip value of items in a delivery day"
             },
-            'compensaition': {
+            'compensation': {
                 "LongName": "Compensation",
                 "Description": "Compensation to participant at the end of the session."
             },
@@ -400,6 +437,39 @@ class ScalpBIDSConverter:
                 "LongName": "Value recall response",
                 "Description": "Subject’s recalled value or judgment about the average list value."
             },
+            "msoffset": {
+                "LongName": "Event offset (ms)",
+                "Description": "Event time offset in milliseconds relative to a task-specific reference (typically the start of the trial or session).",
+                "Units": "ms",
+            },
+            "eegoffset": {
+                "LongName": "EEG sample offset",
+                "Description": "Sample index of the event relative to the start of the EEG recording. For convenience, this is often duplicated in the 'sample' column.",
+            },
+            "rectime": {
+                "LongName": "Recall Time",
+                "Description": "Time when item was recalled.",
+            },
+            "eegfile": {
+                "LongName": "EEG file",
+                "Description": "Filename of the original EEG recording from which this BIDS dataset was derived.",
+            },
+            "eogArtifact": {
+                "LongName": "EOG artifact flag",
+                "Description": "Indicator of whether the event or trial was contaminated by EOG artifact (1 = artifact, 0 = clean, or 'n/a' if not assessed).",
+            },
+            "montage": {
+                "LongName": "EEG montage name",
+                "Description": "Name or identifier of the electrode montage or sensor net used for the recording (e.g., BioSemi 128, GSN-HydroCel-128).",
+            },
+            "phase": {
+                "LongName": "Experiment phase",
+                "Description": "Experiment phase during which the event occurred (e.g., ENCODING, RETRIEVAL, DISTRACTOR, PRACTICE, INSTRUCTION).",
+            },
+            "protocol": {
+                "LongName": "CML protocol name",
+                "Description": "High-level protocol identifier from the CML system (e.g., 'ltp', 'ltpFR', 'ltpFR2', 'ValueCourier').",
+            },
         }
         self.events_descriptor = {k:HED[k] for k in HED if k in self.events.columns}
         
@@ -421,7 +491,7 @@ class ScalpBIDSConverter:
         os.makedirs(bids_path.directory, exist_ok=True)
         self.events.to_csv(bids_path.fpath, sep="\t", index=False)
         with open(bids_path.update(suffix="beh", extension=".json").fpath, "w") as f:
-            json.dump(fp=f, obj = self.events_descriptor)
+            json.dump(fp=f, obj = self.events_desaacriptor)
     
     def write_bids_eeg(self, temp_path="temp.edf", overwrite=True):
         task_name = self.experiment.lower() 
