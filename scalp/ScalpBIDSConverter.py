@@ -31,7 +31,7 @@ class ScalpBIDSConverter:
             'actualvalue',
             'compensation',
             'eegfile',
-            'eegoffset',
+            # 'eegoffset', designed ot not be needed
             'eogArtifact',
             'experiment',
             'intruded',
@@ -258,6 +258,7 @@ class ScalpBIDSConverter:
             "TRIAL_END": "End of a trial.",
             "VALUE_RECALL": "Subject’s value recall response for the current list or item.",
             "FINAL_COMPENSATION": "Event marking display and computation of final monetary compensation.",
+            "EFR_MARK": "Externalized free recall: participants say the items the remember outloud."
         }
         HED = {
             "onset": {
@@ -442,10 +443,10 @@ class ScalpBIDSConverter:
                 "Description": "Event time offset in milliseconds relative to a task-specific reference (typically the start of the trial or session).",
                 "Units": "ms",
             },
-            "eegoffset": {
-                "LongName": "EEG sample offset",
-                "Description": "Sample index of the event relative to the start of the EEG recording. For convenience, this is often duplicated in the 'sample' column.",
-            },
+            # "eegoffset": {
+            #     "LongName": "EEG sample offset",
+            #     "Description": "Sample index of the event relative to the start of the EEG recording. For convenience, this is often duplicated in the 'sample' column.",
+            # },
             "rectime": {
                 "LongName": "Recall Time",
                 "Description": "Time when item was recalled.",
@@ -463,12 +464,12 @@ class ScalpBIDSConverter:
                 "Description": "Name or identifier of the electrode montage or sensor net used for the recording (e.g., BioSemi 128, GSN-HydroCel-128).",
             },
             "phase": {
-                "LongName": "Experiment phase",
-                "Description": "Experiment phase during which the event occurred (e.g., ENCODING, RETRIEVAL, DISTRACTOR, PRACTICE, INSTRUCTION).",
+                "LongName": "Phase",
+                "Description": "?",
             },
             "protocol": {
                 "LongName": "CML protocol name",
-                "Description": "High-level protocol identifier from the CML system (e.g., 'ltp', 'ltpFR', 'ltpFR2', 'ValueCourier').",
+                "Description": "High-level protocol identifier from the CML system (e.g., 'ltp', 'r1').",
             },
         }
         self.events_descriptor = {k:HED[k] for k in HED if k in self.events.columns}
