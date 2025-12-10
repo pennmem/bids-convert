@@ -77,15 +77,23 @@ class ScalpBIDSConverter:
         self.events = self.load_events(beh_only=True)
         self.make_event_descriptors()
         self.write_bids_beh(overwrite=overwrite_beh)
-        self.raw_filepath = self.locate_raw_file()
-        if self.raw_filepath.endswith(".bz2"):
-            self.unzip_raw_files()
-        self.file_type = os.path.splitext(self.raw_filepath)[1]
-        self.raw_file = self.load_scalp_eeg()
-        self.set_montage()
-        self.events = self.load_events()
-        self.write_bids_eeg(temp_path=f"/home1/jrudoler/.temp/{int(time.time()*100)}_temp.edf",
-                            overwrite=overwrite_eeg)
+        try: 
+            self.raw_filepath = self.locate_raw_file()
+            if self.raw_filepath.endswith(".bz2"):
+                self.unzip_raw_files()
+            self.file_type = os.path.splitext(self.raw_filepath)[1]
+            self.raw_file = self.load_scalp_eeg()
+            self.set_montage()
+            self.events = self.load_events()
+            self.write_bids_eeg(temp_path=f"/home1/zrentala/.temp/{int(time.time()*100)}_temp.edf",
+                                overwrite=overwrite_eeg)
+        except Exception as exc:
+            msg = (
+                f"[WARN] EEG conversion failed for "
+                f"{self.subject}, {self.experiment}, session {self.session}: {exc}"
+            )
+            print(msg)
+
     
     def locate_raw_file(self):
         # hacky way to find all matching files!
