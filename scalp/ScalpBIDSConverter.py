@@ -243,7 +243,8 @@ class ScalpBIDSConverter:
             'PRACTICE_REC_WORD_VV': "Vocalization (during practice list free recall).", 
             "COUNTDOWN": "Initiate countdown before encoding.",
             "BREAK_START": "Start mid-session break to rewet scalp cap.",
-            "BREAK_STOP": "Stop mid-session break to rewet scalp cap.",
+            "BREAK_STOP": "Stop mid-session break to rewet scalp cap, same as BREAK_END.",
+            "BREAK_END": "Stop mid-session break to rewet scalp cap, same as BREAK_STOP.",
                 # ---------------- ValueCourier-specific trial types ----------------
             "store mappings": "Display or logging of store-to-location/value mappings in the task.",
             "VIDEO_START": "Start of instructional or task-related video.",
