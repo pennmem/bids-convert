@@ -23,10 +23,6 @@ class ScalpBIDSConverter:
         "ltpFR2": ['subject', 'experiment', 'session', 'trial', 'item_name', 'item_num',
                    'list', 'answer', 'test_x', 'test_y', 'test_z'],
         "VFFR": ['subject', 'experiment', 'session', 'trial', 'item_name', 'item_num', 'too_fast'],
-    #     "ValueCourier": ['subject', 'experiment', 'session', 'trial', 'task', 'item', 'itemno', 'itemvalue', 'actualvalue',
-    #                      'compensation', 'intruded', 'intrusion', 'multiplier', 'numingroupchosen','playerrotY', 'presX', 
-    #                      'presZ', 'primacybuf', 'recalled', 'recencybuf','serialpos', 'store','storeX', 'storeZ', 'storepointtype', 
-    #                      'valuerecall'],
         "ValueCourier": [
             'actualvalue',
             'compensation',
@@ -521,7 +517,7 @@ class ScalpBIDSConverter:
                 edf_file.set_montage(self.montage)
                 mne_bids.write_raw_bids(
                     edf_file,
-                    events_data=None,
+                     events_data=None,
                     bids_path=bids_path,
                     overwrite=overwrite
                 )
