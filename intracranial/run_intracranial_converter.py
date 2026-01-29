@@ -6,8 +6,6 @@ import importlib
 import pandas as pd
 import cmlreaders as cml
 
-# Dask is only needed in parallel mode; import lazily in main()
-
 # --- package path setup ---
 sys.path.insert(0, os.path.expanduser("~/bids-convert"))
 
@@ -69,7 +67,6 @@ def convert_one_job(
     brain_regions: dict,
     root: str,
 ):
-    # IMPORTANT: don't overwrite root here
     Converter = EXPERIMENT_TO_CONVERTER.get(experiment)
     if Converter is None:
         raise ValueError(f"Unknown experiment '{experiment}'. Expected one of {sorted(EXPERIMENT_TO_CONVERTER)}")
@@ -84,14 +81,13 @@ def convert_one_job(
     return converter.run()
 
 
-def build_jobs_parallel(
+def build_jobs(
     *,
     experiments: list[str],
     max_subjects: int,
     subjects_to_exclude: set[str],
     conversion_df: pd.DataFrame,
 ):
-    # Pull candidate rows from data index
     df = cml.get_data_index()
     df = df[df["experiment"].isin(experiments)].copy()
     if subjects_to_exclude:
@@ -111,7 +107,7 @@ def build_jobs_parallel(
     df_subset = pd.concat(dfs, ignore_index=True)
     df_jobs = df_subset[["subject", "experiment", "session"]].copy()
 
-    # Normalize dtypes for merge
+    # Normalize dtypes
     df_jobs["session"] = df_jobs["session"].astype(int)
     conversion_df["session"] = conversion_df["session"].astype(int)
 
@@ -134,15 +130,28 @@ def build_jobs_parallel(
     return df_jobs2
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Intracranial BIDS conversion (single or parallel).")
-    ap.add_argument("--mode", choices=["single", "parallel"], required=True)
+# Top-level function for Dask mapping (avoid lambda/pickle weirdness)
+def run_job(
+    subject, experiment, session, system_version, unit_scale,
+    monopolar, bipolar, mni, tal, area, brain_regions, root
+):
+    return convert_one_job(
+        subject, experiment, int(session), float(system_version), float(unit_scale),
+        monopolar=monopolar, bipolar=bipolar, mni=mni,
+        tal=tal, area=area,
+        brain_regions=brain_regions,
+        root=root,
+    )
 
-    # Conversion lookup
+
+def main():
+    ap = argparse.ArgumentParser(description="Intracranial BIDS conversion (single / serial / parallel).")
+    ap.add_argument("--mode", choices=["single", "serial", "parallel"], required=True)
+
     ap.add_argument("--conversion-csv", default="system_1_unit_conversions.csv")
     ap.add_argument("--root", default="/home1/maint/LTP_BIDS/")
 
-    # Flags shared by both modes
+    # shared flags
     ap.add_argument("--monopolar", action="store_true", default=True)
     ap.add_argument("--no-monopolar", dest="monopolar", action="store_false")
     ap.add_argument("--bipolar", action="store_true", default=True)
@@ -152,16 +161,17 @@ def main():
     ap.add_argument("--tal", action="store_true", default=False)
     ap.add_argument("--area", action="store_true", default=False)
 
-    # Single mode args
+    # single mode args
     ap.add_argument("--subject")
     ap.add_argument("--experiment", choices=sorted(EXPERIMENT_TO_CONVERTER.keys()))
     ap.add_argument("--session", type=int)
 
-    # Parallel mode args
+    # serial/parallel job-building args
     ap.add_argument("--experiments", nargs="*", default=list(EXPERIMENT_TO_CONVERTER.keys()))
     ap.add_argument("--max-subjects", type=int, default=10)
     ap.add_argument("--exclude-subjects", nargs="*", default=["LTP001"])
 
+    # parallel args
     ap.add_argument("--job-name", default="bids_convert")
     ap.add_argument("--memory-per-job", default="50GB")
     ap.add_argument("--max-n-jobs", type=int, default=10)
@@ -177,8 +187,8 @@ def main():
 
     brain_regions = {br: 1 for br in intracranial_BIDS_converter.BRAIN_REGIONS}
 
+    # ---- SINGLE ----
     if args.mode == "single":
-        # Validate required single args
         if args.subject is None or args.experiment is None or args.session is None:
             ap.error("--mode single requires --subject, --experiment, and --session")
 
@@ -208,11 +218,8 @@ def main():
         )
         sys.exit(0 if ok else 1)
 
-    # ---- parallel mode ----
-    import cmldask.CMLDask as da
-    from dask.distributed import as_completed
-
-    df_jobs2 = build_jobs_parallel(
+    # Build jobs for serial/parallel
+    df_jobs2 = build_jobs(
         experiments=args.experiments,
         max_subjects=args.max_subjects,
         subjects_to_exclude=set(args.exclude_subjects),
@@ -222,28 +229,72 @@ def main():
     print("Jobs to run:", len(df_jobs2))
     print(df_jobs2.head())
 
+    # ---- SERIAL ----
+    if args.mode == "serial":
+        n_ok = 0
+        n_fail = 0
+        df_jobs2 = df_jobs2.reset_index(drop=True)
+
+        for i, row in df_jobs2.iterrows():
+            subj = row["subject"]
+            exp = row["experiment"]
+            sess = int(row["session"])
+            sv = float(row["system_version"])
+            us = float(row["unit_scale"])
+
+            print(f"\n[{i+1}/{len(df_jobs2)}] {subj} {exp} ses-{sess} (sv={sv}, unit_scale={us})")
+
+            try:
+                _ = convert_one_job(
+                    subj, exp, sess, sv, us,
+                    monopolar=args.monopolar,
+                    bipolar=args.bipolar,
+                    mni=args.mni,
+                    tal=args.tal,
+                    area=args.area,
+                    brain_regions=brain_regions,
+                    root=args.root,
+                )
+                n_ok += 1
+                print("✓ finished")
+            except Exception as e:
+                n_fail += 1
+                print("✗ failed")
+                print(e)
+
+        print(f"\nDone. ok={n_ok} fail={n_fail}")
+        sys.exit(0 if n_fail == 0 else 1)
+
+    # ---- PARALLEL ----
+    import cmldask.CMLDask as da
+    from dask.distributed import as_completed
+
+    log_dir = os.path.expanduser(args.log_directory)
+    os.makedirs(log_dir, exist_ok=True)
+
     client = da.new_dask_client_slurm(
         job_name=args.job_name,
         memory_per_job=args.memory_per_job,
         max_n_jobs=args.max_n_jobs,
         threads_per_job=args.threads_per_job,
         adapt=args.adapt,
-        log_directory=args.log_directory,
+        log_directory=log_dir,  # expanded + ensured exists
     )
 
     futures = client.map(
-        lambda s, e, sess, sv, us: convert_one_job(
-            s, e, sess, sv, us,
-            monopolar=args.monopolar, bipolar=args.bipolar, mni=args.mni,
-            tal=args.tal, area=args.area,
-            brain_regions=brain_regions,
-            root=args.root,
-        ),
+        run_job,
         df_jobs2["subject"].tolist(),
         df_jobs2["experiment"].tolist(),
         df_jobs2["session"].tolist(),
         df_jobs2["system_version"].tolist(),
         df_jobs2["unit_scale"].tolist(),
+        [args.monopolar] * len(df_jobs2),
+        [args.bipolar] * len(df_jobs2),
+        [args.mni] * len(df_jobs2),
+        [args.tal] * len(df_jobs2),
+        [args.area] * len(df_jobs2),
+        [brain_regions] * len(df_jobs2),
+        [args.root] * len(df_jobs2),
     )
 
     n_ok = 0
