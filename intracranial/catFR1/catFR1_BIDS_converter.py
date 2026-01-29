@@ -76,7 +76,30 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
             else:
                 durations.append(row.duration)
 
-            events['duration'] = durations    # preserves column order
+
+            # --- ensure durations matches events length ---
+            n = len(events)
+
+            # scalar -> broadcast
+            if np.isscalar(durations):
+                durations = np.full(n, float(durations))
+            else:
+                durations = np.asarray(durations)
+
+                # length-1 vector -> broadcast
+                if durations.shape[0] == 1:
+                    durations = np.full(n, float(durations[0]))
+
+            # wrong length -> fail loudly with context
+            if len(durations) != n:
+                raise ValueError(
+                    f"apply_event_durations: duration length mismatch for "
+                    f"{self.subject} {self.experiment} ses-{self.session}: "
+                    f"len(durations)={len(durations)} vs len(events)={n}"
+                )
+
+            events["duration"] = durations    # preserves column order
+            # events['duration'] = durations    # preserves column order
             return events
     
     def make_events_descriptor(self):
