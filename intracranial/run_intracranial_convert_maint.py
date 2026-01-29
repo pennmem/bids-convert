@@ -68,7 +68,7 @@ if __name__ == "__main__":
     max_subjects = 10
     experiments = ["catFR1", "catFR2", "FR1", "FR2", "PAL1", "PAL2", "pyFR", "RepFR1", "YC1", "YC2"]
 
-    # subjects_to_exclude = {"LTP001"}  # <-- your list here
+    subjects_to_exclude = {"LTP001"}  # <-- your list here
 
     df = cml.get_data_index()
 
