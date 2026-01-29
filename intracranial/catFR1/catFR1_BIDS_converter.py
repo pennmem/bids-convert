@@ -9,8 +9,8 @@ import mne_bids
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
 class catFR1_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_categorized_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/catFR1/wordpools/wordpool_categorized_EN.txt', dtype=str)
-    wordpool_categorized_SP = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/catFR1/wordpools/wordpool_categorized_SP.txt', dtype=str)
+    wordpool_categorized_EN = np.loadtxt('catFR1/wordpools/wordpool_categorized_EN.txt', dtype=str)
+    wordpool_categorized_SP = np.loadtxt('catFR1/wordpools/wordpool_categorized_SP.txt', dtype=str)
 
     # initialize
     def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/catFR1/'):

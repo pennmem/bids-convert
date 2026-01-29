@@ -21,11 +21,11 @@ class intracranial_BIDS_converter:
         self.session = session
         self.system_version = system_version
         self.unit_scale = unit_scale
-        self.monopolar = monopolar
-        self.bipolar = bipolar
-        self.mni = mni
-        self.tal = tal
-        self.area = area
+        self.monopolar = monopolar # bool
+        self.bipolar = bipolar # bool
+        self.mni = mni # bool
+        self.tal = tal # bool
+        self.area = area # bool
         if self.area:
             self.area_map = self.generate_area_map()
         self.brain_regions = brain_regions   # dictionary mapping target regions to number of non-NaN contacts

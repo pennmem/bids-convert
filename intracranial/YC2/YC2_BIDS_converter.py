@@ -10,7 +10,7 @@ import scipy.stats
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
 class YC2_BIDS_converter(intracranial_BIDS_converter):
-    wordpool = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/YC2/wordpools/wordpool.txt', dtype=str)
+    wordpool = np.loadtxt('YC2/wordpools/wordpool.txt', dtype=str)
 
     # initialize
     def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/YC2/'):

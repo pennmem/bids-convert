@@ -9,7 +9,7 @@ from ..intracranial_BIDS_metadata import intracranial_BIDS_metadata
 # class to use when doing metadata checks before converting pyFR to BIDS format
 class pyFR_BIDS_metadata(intracranial_BIDS_metadata):
 
-    def __init__(self, experiment='pyFR', root='/home1/hherrema/BIDS/'):
+    def __init__(self, experiment='pyFR', root='/home1/maint/LTP_BIDS/'):
         super().__init__(experiment, root)
 
     # try to load events, math events, contacts, pairs, monopolar and bipolar EEG

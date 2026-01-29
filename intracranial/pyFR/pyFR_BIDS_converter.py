@@ -10,7 +10,7 @@ import scipy
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
 class pyFR_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/pyFR/wordpools/wordpool_EN.txt', dtype=str)
+    wordpool_EN = np.loadtxt('pyFR/wordpools/wordpool_EN.txt', dtype=str)
     CH_TYPES = {'TJ027': 'ECOG', 'TJ029': 'SEEG', 'TJ030': 'SEEG', 'TJ032': 'ECOG', 'TJ061': 'ECOG', 'TJ083':'ECOG',
                 'UP004': 'SEEG', 'UP008':'ECOG', 'UP011':'ECOG', 'UP037': 'ECOG'}
 

@@ -6,8 +6,8 @@ from tqdm import tqdm
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
 class RepFR1_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/RepFR1/wordpools/wordpool_EN.txt', dtype=str)
-    wordpool_SP = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/RepFR1/wordpools/wordpool_SP.txt', dtype=str)
+    wordpool_EN = np.loadtxt('RepFR1/wordpools/wordpool_EN.txt', dtype=str)
+    wordpool_SP = np.loadtxt('RepFR1/wordpools/wordpool_SP.txt', dtype=str)
     
     def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/RepFR1/'):
         super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
