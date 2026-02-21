@@ -1,42 +1,53 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import subprocess
 import sys
 import importlib
+import importlib.util
 import pandas as pd
 import cmlreaders as cml
 
 # --- package path setup ---
 sys.path.insert(0, os.path.expanduser("~/bids-convert"))
 
-import intracranial.run_intracranial_convert_maint as rim
-importlib.reload(rim)
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from intracranial.intracranial_BIDS_converter import intracranial_BIDS_converter
-from intracranial.catFR1.catFR1_BIDS_converter import catFR1_BIDS_converter
-from intracranial.catFR2.catFR2_BIDS_converter import catFR2_BIDS_converter
-from intracranial.FR1.FR1_BIDS_converter import FR1_BIDS_converter
-from intracranial.FR2.FR2_BIDS_converter import FR2_BIDS_converter
-from intracranial.PAL1.PAL1_BIDS_converter import PAL1_BIDS_converter
-from intracranial.PAL2.PAL2_BIDS_converter import PAL2_BIDS_converter
-from intracranial.pyFR.pyFR_BIDS_converter import pyFR_BIDS_converter
-from intracranial.RepFR1.RepFR1_BIDS_converter import RepFR1_BIDS_converter
-from intracranial.YC1.YC1_BIDS_converter import YC1_BIDS_converter
-from intracranial.YC2.YC2_BIDS_converter import YC2_BIDS_converter
 
-
-EXPERIMENT_TO_CONVERTER = {
-    "catFR1": catFR1_BIDS_converter,
-    "catFR2": catFR2_BIDS_converter,
-    "FR1": FR1_BIDS_converter,
-    "FR2": FR2_BIDS_converter,
-    "PAL1": PAL1_BIDS_converter,
-    "PAL2": PAL2_BIDS_converter,
-    "pyFR": pyFR_BIDS_converter,
-    "RepFR1": RepFR1_BIDS_converter,
-    "YC1": YC1_BIDS_converter,
-    "YC2": YC2_BIDS_converter,
+# Converters are imported lazily (on first use) so that class-level operations
+# in each converter (e.g. loading wordpool files) only run when needed.
+_EXPERIMENT_MODULES = {
+    "catFR1":  ("intracranial.catFR1.catFR1_BIDS_converter",   "catFR1_BIDS_converter"),
+    "catFR2":  ("intracranial.catFR2.catFR2_BIDS_converter",   "catFR2_BIDS_converter"),
+    "FR1":     ("intracranial.FR1.FR1_BIDS_converter",         "FR1_BIDS_converter"),
+    "FR2":     ("intracranial.FR2.FR2_BIDS_converter",         "FR2_BIDS_converter"),
+    "PAL1":    ("intracranial.PAL1.PAL1_BIDS_converter",       "PAL1_BIDS_converter"),
+    "PAL2":    ("intracranial.PAL2.PAL2_BIDS_converter",       "PAL2_BIDS_converter"),
+    "pyFR":    ("intracranial.pyFR.pyFR_BIDS_converter",       "pyFR_BIDS_converter"),
+    "RepFR1":  ("intracranial.RepFR1.RepFR1_BIDS_converter",   "RepFR1_BIDS_converter"),
+    "YC1":     ("intracranial.YC1.YC1_BIDS_converter",         "YC1_BIDS_converter"),
+    "YC2":     ("intracranial.YC2.YC2_BIDS_converter",         "YC2_BIDS_converter"),
+    "PS2":     ("intracranial.PS2.PS2_BIDS_converter",         "PS2_BIDS_converter"),
+    # PS2.1 folder name contains a dot so it cannot be imported via importlib.import_module;
+    # store the absolute file path instead and load via spec_from_file_location.
+    "PS2.1":   (os.path.join(_SCRIPT_DIR, "PS2.1", "PS2.1_BIDS_converter.py"), "PS21_BIDS_converter"),
 }
+
+
+def _get_converter(experiment: str):
+    if experiment not in _EXPERIMENT_MODULES:
+        raise ValueError(f"Unknown experiment '{experiment}'. Expected one of {sorted(_EXPERIMENT_MODULES)}")
+    module_path, class_name = _EXPERIMENT_MODULES[experiment]
+    if module_path.endswith(".py"):
+        # File-based loading for modules whose directory name cannot be used as a
+        # Python identifier (e.g. "PS2.1" contains a dot).
+        spec = importlib.util.spec_from_file_location(class_name, module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    else:
+        module = importlib.import_module(module_path)
+    return getattr(module, class_name)
 
 
 def lookup_conversion_params(conversion_df: pd.DataFrame, subject: str, experiment: str, session: int):
@@ -67,9 +78,7 @@ def convert_one_job(
     brain_regions: dict,
     root: str,
 ):
-    Converter = EXPERIMENT_TO_CONVERTER.get(experiment)
-    if Converter is None:
-        raise ValueError(f"Unknown experiment '{experiment}'. Expected one of {sorted(EXPERIMENT_TO_CONVERTER)}")
+    Converter = _get_converter(experiment)
 
     converter = Converter(
         subject, experiment, session,
@@ -120,7 +129,11 @@ def build_jobs(
 
     missing = df_jobs2["system_version"].isna() | df_jobs2["conversion_to_V"].isna()
     if missing.any():
-        print(f"Skipping {missing.sum()} job(s) with no matching conversion row.")
+        print(
+            f"WARNING: Skipping {missing.sum()} job(s) not found in the conversion CSV.\n"
+            f"  Add the following rows to system_1_unit_conversions.csv "
+            f"(columns: subject, experiment, session, system_version, conversion_to_V):"
+        )
         print(df_jobs2.loc[missing, merge_keys].to_string(index=False))
 
     df_jobs2 = df_jobs2.loc[~missing].copy()
@@ -144,11 +157,90 @@ def run_job(
     )
 
 
+def validate_bids_output(root: str):
+    """
+    Validate a BIDS dataset at `root`.
+
+    Two-layer approach:
+      1. Python path validation (bids_validator): checks every file's name and
+         path against BIDS naming conventions.  Always available.
+      2. Full CLI validation (bids-validator npm tool): checks file contents,
+         required metadata fields, and sidecar completeness.  Only runs when
+         the CLI is on PATH.
+
+    Returns True if no errors were found, False otherwise.
+    """
+    print(f"\n{'='*60}")
+    print(f"BIDS Validation: {root}")
+    print(f"{'='*60}")
+
+    any_errors = False
+
+    # --- Layer 1: Python path/naming validation ---
+    try:
+        from bids_validator import BIDSValidator
+        validator = BIDSValidator()
+        naming_errors = []
+        for dirpath, _, files in os.walk(root):
+            for fname in files:
+                full = os.path.join(dirpath, fname)
+                rel = "/" + os.path.relpath(full, root)
+                if not validator.is_bids(rel):
+                    naming_errors.append(rel)
+
+        if naming_errors:
+            print(f"\n[Path validation] {len(naming_errors)} file(s) with non-BIDS-compliant names:")
+            for p in sorted(naming_errors):
+                print(f"  ✗ {p}")
+            any_errors = True
+        else:
+            print(f"\n[Path validation] All file names are BIDS-compliant. ✓")
+
+    except ImportError:
+        print("[Path validation] bids_validator not installed — skipping. (pip install bids_validator)")
+
+    # --- Layer 2: Full CLI validation (npm bids-validator) ---
+    # Prefer direct invocation; fall back to npx (local npm install).
+    if subprocess.run(["which", "bids-validator"], capture_output=True).returncode == 0:
+        cmd = ["bids-validator", root, "--verbose"]
+    elif subprocess.run(["which", "npx"], capture_output=True).returncode == 0:
+        cmd = ["npx", "bids-validator", root, "--verbose"]
+    else:
+        cmd = None
+
+    if cmd is not None:
+        print(f"\n[Full validation] Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        print(result.stdout)
+        if result.returncode != 0:
+            # Distinguish a validator crash (e.g. Node.js too old) from actual BIDS errors.
+            if "SyntaxError" in result.stderr or "SyntaxError" in result.stdout:
+                print(
+                    f"WARNING: bids-validator failed to start (likely Node.js version too old).\n"
+                    f"  Run manually in your shell: {' '.join(cmd)}\n"
+                    f"  stderr: {result.stderr.strip()}"
+                )
+            else:
+                print(result.stderr)
+                any_errors = True
+    else:
+        print(
+            "\n[Full validation] bids-validator not found — skipping content/metadata checks.\n"
+            "  Install via:  npm install -g bids-validator\n"
+            "  Or run via Docker:\n"
+            f"    docker run --rm -v {root}:/data:ro bids/validator /data"
+        )
+
+    print(f"\nValidation {'PASSED ✓' if not any_errors else 'FAILED ✗'}")
+    print(f"{'='*60}\n")
+    return not any_errors
+
+
 def main():
     ap = argparse.ArgumentParser(description="Intracranial BIDS conversion (single / serial / parallel).")
-    ap.add_argument("--mode", choices=["single", "serial", "parallel"], required=True)
+    ap.add_argument("--mode", choices=["single", "serial", "parallel"], required=False)
 
-    ap.add_argument("--conversion-csv", default="system_1_unit_conversions.csv")
+    ap.add_argument("--conversion-csv", default=os.path.join(_SCRIPT_DIR, "system_1_unit_conversions.csv"))
     ap.add_argument("--root", default="/home1/maint/LTP_BIDS/")
 
     # shared flags
@@ -160,16 +252,22 @@ def main():
     ap.add_argument("--no-mni", dest="mni", action="store_false")
     ap.add_argument("--tal", action="store_true", default=False)
     ap.add_argument("--area", action="store_true", default=False)
+    ap.add_argument("--validate", action="store_true", default=False,
+                    help="Run BIDS validation on the output directory after conversion.")
+    ap.add_argument("--validate-only", action="store_true", default=False,
+                    help="Skip conversion and only run BIDS validation on --root.")
 
     # single mode args
     ap.add_argument("--subject")
-    ap.add_argument("--experiment", choices=sorted(EXPERIMENT_TO_CONVERTER.keys()))
+    ap.add_argument("--experiment", choices=sorted(_EXPERIMENT_MODULES.keys()))
     ap.add_argument("--session", type=int)
 
     # serial/parallel job-building args
-    ap.add_argument("--experiments", nargs="*", default=list(EXPERIMENT_TO_CONVERTER.keys()))
+    ap.add_argument("--experiments", nargs="*", default=list(_EXPERIMENT_MODULES.keys()))
     ap.add_argument("--max-subjects", type=int, default=10)
     ap.add_argument("--exclude-subjects", nargs="*", default=["LTP001"])
+    ap.add_argument("--smokescreen", action="store_true", default=False,
+                    help="Quick test: limit to 1 subject per experiment.")
 
     # parallel args
     ap.add_argument("--job-name", default="bids_convert")
@@ -181,6 +279,10 @@ def main():
     ap.add_argument("--log-directory", default="~/logs/")
 
     args = ap.parse_args()
+
+    if args.validate_only:
+        valid = validate_bids_output(args.root)
+        sys.exit(0 if valid else 1)
 
     conversion_df = pd.read_csv(args.conversion_csv)
     conversion_df["session"] = conversion_df["session"].astype(int)
@@ -216,12 +318,16 @@ def main():
             brain_regions=brain_regions,
             root=args.root,
         )
+        if args.validate:
+            valid = validate_bids_output(args.root)
+            sys.exit(0 if ok and valid else 1)
         sys.exit(0 if ok else 1)
 
     # Build jobs for serial/parallel
+    max_subjects = 1 if args.smokescreen else args.max_subjects
     df_jobs2 = build_jobs(
         experiments=args.experiments,
-        max_subjects=args.max_subjects,
+        max_subjects=max_subjects,
         subjects_to_exclude=set(args.exclude_subjects),
         conversion_df=conversion_df,
     )
@@ -257,12 +363,16 @@ def main():
                 )
                 n_ok += 1
                 print("✓ finished")
-            except Exception as e:
+            except Exception:
+                import traceback
                 n_fail += 1
                 print("✗ failed")
-                print(e)
+                traceback.print_exc()
 
         print(f"\nDone. ok={n_ok} fail={n_fail}")
+        if args.validate:
+            valid = validate_bids_output(args.root)
+            sys.exit(0 if n_fail == 0 and valid else 1)
         sys.exit(0 if n_fail == 0 else 1)
 
     # ---- PARALLEL ----
@@ -315,207 +425,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-# import cmlreaders as cml
-# import mne
-# import numpy as np
-# import pandas as pd
-# pd.options.display.max_columns=None
-# pd.options.display.max_rows=200
-# import os
-# from scipy.io import loadmat
-# # from ScalpBIDSConverter import *
-# import cmldask.CMLDask as da
-# import os, sys, importlib
-
-# # add the package ROOT, not the intracranial folder
-# sys.path.insert(0, os.path.expanduser("~/bids-convert"))
-
-# import intracranial.run_intracranial_convert_maint as rim
-# importlib.reload(rim)  # if you edited it recently
-
-# # now this should work because relative imports have a parent package
-
-# from intracranial.intracranial_BIDS_converter import intracranial_BIDS_converter
-
-# from intracranial.catFR1.catFR1_BIDS_converter import catFR1_BIDS_converter
-# from intracranial.catFR2.catFR2_BIDS_converter import catFR2_BIDS_converter
-# from intracranial.FR1.FR1_BIDS_converter import FR1_BIDS_converter
-# from intracranial.FR2.FR2_BIDS_converter import FR2_BIDS_converter
-# from intracranial.PAL1.PAL1_BIDS_converter import PAL1_BIDS_converter
-# from intracranial.PAL2.PAL2_BIDS_converter import PAL2_BIDS_converter
-# from intracranial.pyFR.pyFR_BIDS_converter import pyFR_BIDS_converter
-# from intracranial.RepFR1.RepFR1_BIDS_converter import RepFR1_BIDS_converter
-# from intracranial.YC1.YC1_BIDS_converter import YC1_BIDS_converter
-# from intracranial.YC2.YC2_BIDS_converter import YC2_BIDS_converter
-
-# # # import sys
-# # # sys.path.insert(0, "/ABS/PATH/to/bids-convert/intracranial")
-
-# # %matplotlib inline
-
-# def convert_to_bids(subject, experiment, session,system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root="/home1/maint/LTP_BIDS/"):
-#     # if os.path.exists(f"/data8/PEERS_BIDS/sub-{subject}/ses-{session}/eeg/sub-{subject}_ses-{session}_task-{experiment}_events.json"):
-#     #     if (os.path.getmtime(f"/data8/PEERS_BIDS/sub-{subject}/ses-{session}/eeg/sub-{subject}_ses-{session}_task-{experiment}_events.json") > 1684160000):
-#     #         return True
-#     root = '/home1/maint/LTP_BIDS/'
-#     if experiment == "catFR1":
-#         converter = catFR1_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
-#     elif experiment == "catFR2":
-#         converter = catFR2_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
-#     elif experiment == "FR1":
-#         converter = FR1_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
-#     elif experiment == "FR2":
-#         converter = FR2_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
-#     elif experiment == "PAL1":
-#         converter = PAL1_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
-#     elif experiment == "PAL2":
-#         converter = PAL2_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
-#     elif experiment == "pyFR":
-#         converter = pyFR_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
-#     elif experiment == "RepFR1":
-#         converter = RepFR1_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
-#     elif experiment == "YC1":
-#         converter = YC1_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
-#     elif experiment == "YC2":
-#         converter = YC2_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
-#     return converter.run()
-
-# if __name__ == "__main__":
-#     df = cml.get_data_index()
-#     max_subjects = 10
-#     experiments = ["catFR1", "catFR2", "FR1", "FR2", "PAL1", "PAL2", "pyFR", "RepFR1", "YC1", "YC2"]
-
-#     subjects_to_exclude = {"LTP001"}  # <-- your list here
-
-#     df = cml.get_data_index()
-
-#     df_exp = df[df["experiment"].isin(experiments)].copy()
-
-#     # remove excluded subjects up front
-#     df_exp = df_exp[~df_exp["subject"].isin(subjects_to_exclude)].copy()
-
-#     dfs = []
-
-#     for exp in experiments:
-#         df_this = df_exp[df_exp["experiment"] == exp]
-
-#         subjects = (
-#             df_this["subject"]
-#             .drop_duplicates()
-#             .sort_values()      # deterministic
-#             .head(max_subjects)
-#         )
-
-#         df_keep = df_this[df_this["subject"].isin(subjects)].copy()
-#         dfs.append(df_keep)
-
-#     df_subset = pd.concat(dfs, ignore_index=True)
-    
-#     client = da.new_dask_client_slurm(
-#         job_name="bids_convert",
-#         memory_per_job="50GB",
-#         max_n_jobs=10, threads_per_job=1, 
-#         adapt=True,
-#         log_directory="~/logs/",
-#     )
-#     conversion_df = pd.read_csv('system_1_unit_conversions.csv')
-#     df_jobs = df_subset[["subject", "experiment", "session"]].copy()
-
-#     # conversion_df = pd.read_csv("system_1_unit_conversions.csv")
-
-#     # Normalize dtypes (session often mismatches int vs str)
-#     df_jobs["session"] = df_jobs["session"].astype(int)
-#     conversion_df["session"] = conversion_df["session"].astype(int)
-
-#     # Merge on the actual keys
-#     merge_keys = ["subject", "experiment", "session"]
-
-#     df_jobs2 = df_jobs.merge(
-#         conversion_df[merge_keys + ["system_version", "conversion_to_V"]],
-#         on=merge_keys,
-#         how="left",
-#     )
-
-#     # Drop non-matching rows
-#     missing = df_jobs2["system_version"].isna() | df_jobs2["conversion_to_V"].isna()
-#     if missing.any():
-#         print(f"Skipping {missing.sum()} job(s) with no matching conversion row:")
-#         print(df_jobs2.loc[missing, merge_keys].to_string(index=False))
-
-#     df_jobs2 = df_jobs2.loc[~missing].copy()
-
-#     # Per-job parameters
-#     df_jobs2["system_version"] = df_jobs2["system_version"].astype(float)
-#     df_jobs2["unit_scale"] = df_jobs2["conversion_to_V"].astype(float)
-
-#     print("Jobs to run:", len(df_jobs2))
-#     print(df_jobs2.head())
-
-#     # Constants
-#     brain_regions = {br: 1 for br in intracranial_BIDS_converter.BRAIN_REGIONS}
-#     monopolar = True
-#     bipolar = True
-#     mni = True
-#     tal = False
-#     area = False
-#     root = "/home1/maint/LTP_BIDS/"
-
-#     # Map with per-job values (IMPORTANT)
-#     futures = client.map(
-#         convert_to_bids,
-#         df_jobs2["subject"].tolist(),
-#         df_jobs2["experiment"].tolist(),
-#         df_jobs2["session"].tolist(),
-#         df_jobs2["system_version"].tolist(),   # <- per job
-#         df_jobs2["unit_scale"].tolist(),       # <- per job
-#         [monopolar] * len(df_jobs2),
-#         [bipolar] * len(df_jobs2),
-#         [mni] * len(df_jobs2),
-#         [tal] * len(df_jobs2),
-#         [area] * len(df_jobs2),
-#         [brain_regions] * len(df_jobs2),
-#         [root] * len(df_jobs2),
-#     )
-
-# #     df_jobs = df_subset[["subject", "experiment", "session"]].copy()
-
-# #     brain_regions = {br: 1 for br in intracranial_BIDS_converter.BRAIN_REGIONS}
-# #     system_version = 4.0
-# #     unit_scale = float(conversion_df[conversion_df['subject'] == row["subject"]]["conversion_to_V"].iloc[0])
-# #     monopolar = True
-# #     bipolar = True
-# #     mni = True
-# #     tal = False
-# #     area = False
-# #     root = "/home1/maint/LTP_BIDS/"
-
-
-     
-# #     futures = client.map(
-# #         convert_to_bids,
-# #         df_jobs["subject"].tolist(),
-# #         df_jobs["experiment"].tolist(),
-# #         df_jobs["session"].tolist(),
-# #         [system_version] * len(df_jobs),
-# #         [unit_scale] * len(df_jobs),
-# #         [monopolar] * len(df_jobs),
-# #         [bipolar] * len(df_jobs),
-# #         [mni] * len(df_jobs),
-# #         [tal] * len(df_jobs),
-# #         [area] * len(df_jobs),
-# #         [brain_regions] * len(df_jobs),
-# #         [root] * len(df_jobs),
-# #     )
-#     # results = client.gather(futures)
-#     from dask.distributed import as_completed
-
-#     for future in as_completed(futures):
-#         try:
-#             result = future.result()
-#             print("✓ finished:", future.key)
-#         except Exception as e:
-#             print("✗ failed:", future.key)
-#             print(e)

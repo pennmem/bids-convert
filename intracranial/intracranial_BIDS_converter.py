@@ -31,10 +31,15 @@ class intracranial_BIDS_converter:
         self.brain_regions = brain_regions   # dictionary mapping target regions to number of non-NaN contacts
         self.root = root
 
+    @property
+    def task_label(self):
+        """BIDS-compliant task label: alphanumeric only (e.g. 'PS21' for 'PS2.1')."""
+        return re.sub(r'[^a-zA-Z0-9]', '', self.experiment)
+
     # ---------- BIDS Utility ----------
     # return a base BIDS_path object to update
     def _BIDS_path(self):
-        bids_path = mne_bids.BIDSPath(subject=self.subject, task=self.experiment, session=str(self.session),
+        bids_path = mne_bids.BIDSPath(subject=self.subject, task=self.task_label, session=str(self.session),
                                         root=self.root)
         return bids_path
 
@@ -145,6 +150,9 @@ class intracranial_BIDS_converter:
         br_cols = []
         for br in self.BRAIN_REGIONS:
             if self.brain_regions[br] > 0:
+                if br not in self.contacts.columns:
+                    print(f"WARNING: brain region column '{br}' not found in contacts for {self.subject} — omitting from electrodes TSV.")
+                    continue
                 electrodes[br] = self.contacts[br]
                 br_cols.append(br)
         

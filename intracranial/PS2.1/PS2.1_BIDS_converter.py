@@ -1,125 +1,86 @@
 # imports
-import cmlreaders as cml
 import pandas as pd
 import numpy as np
-import re
-import json
-import os
-import mne_bids
-from ..intracranial_BIDS_converter import intracranial_BIDS_converter
+from intracranial.intracranial_BIDS_converter import intracranial_BIDS_converter
 
-class PS2_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/PAL2/wordpools/wordpool_EN.txt', dtype=str)
-    wordpool_SP = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/PAL2/wordpools/wordpool_SP.txt', dtype=str)
-    
+
+class PS21_BIDS_converter(intracranial_BIDS_converter):
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/PAL2/'):
+    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions,
+                 root='/scratch/hherrema/BIDS/PS2.1/'):
         super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
 
     # ---------- Events ----------
     def set_wordpool(self):
         return 'n/a'
-        # evs = self.reader.load('events')
-        # word_evs = evs[evs['type'] == 'STUDY_PAIR']
-        # if all([x in self.wordpool_EN for x in word_evs.study_1]) and all([x in self.wordpool_EN for x in word_evs.study_2]):
-        #     wordpool_file = 'wordpools/wordpool_EN.txt'
-        # elif all([x in self.wordpool_SP for x in word_evs.study_1]) and all([x in self.wordpool_SP for x in word_evs.study_2]):
-        #     wordpool_file = 'wordpools/wordpool_SP.txt'
-        # else:
-        #     wordpool_file = 'n/a'
-        
-        # return wordpool_file
-    
+
     def events_to_BIDS(self):
         events = self.reader.load('events')
         events = self.unpack_stim_params(events)                        # convert stimulation parameters into columns
-        # events = self.assign_stim_lists(events)                         # assign stim_list values for math events
-
-        events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type', 'stim_on':'stimulation'})   # rename columns
-        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                      # onset from first event [s]
-        events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0   # event duration [s] --> lots of superfluous events may mess this up
-        events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)             # replace events with negative duration with 0.0s
-        events = self.apply_event_durations(events)                                             # apply well-defined durations [s]
-        # events['response_time'] = 'n/a'                                                         # response time [s]
-        # events.loc[events.trial_type=='PROB', 'response_time'] = events['rectime'] / 1000.0     # math events use rectime [s]
-        # events.loc[events.trial_type=='REC_EVENT', 'response_time'] = events['RT'] / 1000.0     # recall events use RT [s]
-        # events['stim_file'] = np.where((events.trial_type.isin(['STUDY_PAIR', 'TEST_PROBE']))
-                                        # & (events.list>0), self.wordpool_file, 'n/a')           # add wordpool to word events
-        # events.loc[events.answer==-999, 'answer'] = 'n/a'                                       # non-math events no answer
-        # events.loc[events.stimulation == 0, ['anode_label', 'cathode_label']] = ''              # set stim parameters to defaults if no stimulation
-        # events.loc[events.stimulation == 0, ['stim_duration', 'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width']] = 0
+        events = events.rename(columns={'eegoffset': 'sample', 'type': 'trial_type', 'stim_on': 'stimulation'})
+        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0     # onset from first event [s]
+        events = self.apply_event_durations(events)                             # apply well-defined durations [s]
 
         events = events.fillna('n/a')                  # change NaN to 'n/a'
         events = events.replace('', 'n/a')             # no empty cells
 
         # select and re-order columns
-        events = events[['eegoffset', 'ad_observed', 'eegfile', 'exp_version', 'experiment', 'is_stim', 'montage', 'msoffset', 'mstime', 'protocol', 'session', 'stim_params', 'subject', 'type']]
-        
+        stim_cols = [c for c in ['amplitude', 'anode_label', 'anode_number', 'burst_freq',
+                                  'cathode_label', 'cathode_number', 'n_bursts', 'n_pulses',
+                                  'pulse_freq', 'pulse_width', 'stim_duration', 'stimulation']
+                     if c in events.columns]
+        base_cols = ['onset', 'duration', 'sample', 'trial_type', 'mstime', 'msoffset',
+                     'subject', 'experiment', 'session', 'is_stim', 'eegfile', 'exp_version',
+                     'montage', 'protocol', 'ad_observed', 'stim_params']
+        events = events[[c for c in base_cols if c in events.columns] + stim_cols]
+
         return events
-    
+
     def apply_event_durations(self, events):
+        # STIM_ON and SHAM: use stim_duration from stim_params [ms -> s]
+        # all other events: 0.0 s (instantaneous markers)
+        has_stim_duration = 'stim_duration' in events.columns
         durations = []
         for _, row in events.iterrows():
-            # # fixation events = 250 ms
-            # if row.trial_type == 'STUDY_ORIENT' or row.trial_type == 'TEST_ORIENT':
-            #     durations.append(0.250)
-
-            # # no countdown events = 10000 ms
-
-            # # word pair presentation events = 4000 ms
-            # elif row.trial_type == 'STUDY_PAIR':
-            #     durations.append(4.0)
-
-            # # recall cue events = 4000 ms
-            # elif row.trial_type == 'TEST_PROBE':
-            #     durations.append(4.0)
-
-            # stimulation events
-            if row.trial_type == 'STIM_ON':
-                durations.append(4.6)
-
-            # keep current duration
+            if row.trial_type in ('STIM_ON', 'SHAM') and has_stim_duration and pd.notna(row.stim_duration):
+                durations.append(float(row.stim_duration) / 1000.0)
             else:
-                durations.append(row.duration)
-
+                durations.append(0.0)
         events['duration'] = durations
         return events
-    
-    # unpack stimulation parameters from dictionary and add as columns to events dataframe
-    def unpack_stim_params(self, events):
-        stim_params_df = pd.DataFrame()
-        for _, row in events.iterrows():
-            stim_params_df = pd.concat([stim_params_df, pd.DataFrame.from_dict([row.stim_params])], ignore_index=True)
 
-        return pd.concat([events, stim_params_df], axis=1)
-    
-    # assign stim_list values to math events with default -999
-    # def assign_stim_lists(self, events):
-    #     stim_list = []
-    #     for _, row in events.iterrows():
-    #         if row['stim_list'] == -999:
-    #             stim_list.append(max(events[events['list'] == row['list']].stim_list))
-    #         else:
-    #             stim_list.append(row.stim_list)
-        
-    #     events['stim_list'] = stim_list
-    #     return events
-    
+    # unpack stimulation parameters from list-of-dict into columns
+    def unpack_stim_params(self, events):
+        stim_params_rows = []
+        for _, row in events.iterrows():
+            sp = row.stim_params
+            if isinstance(sp, list) and len(sp) > 0:
+                stim_params_rows.append(sp[0])
+            else:
+                stim_params_rows.append({})
+        stim_params_df = pd.DataFrame(stim_params_rows)
+        return pd.concat([events.reset_index(drop=True), stim_params_df], axis=1)
+
     def make_events_descriptor(self):
         descriptions = {
             "STIM_ON": "Onset of electrical stimulation.",
             "STIM_OFF": "Offset of electrical stimulation.",
-            # "BEGIN_PS2": "Beginning of PS2 experiment.",
-            "SHAM": "Sham stimulation event.",
-            "AD_CHECK": "Attention check event during encoding phase.",
+            "BEGIN_PS2": "Beginning of PS2 experiment.",
+            "SESS_START": "Start of recording session.",
+            "END_EXP": "End of experiment.",
+            "AD_CHECK": "Attention check event.",
+            "PAUSED": "Experiment paused.",
+            "UNPAUSED": "Experiment unpaused.",
+            "AMPLITUDE_CONFIRMED": "Stimulation amplitude confirmed by experimenter.",
+            "SHAM": "Sham stimulation event (no actual stimulation delivered).",
         }
         HED = {
             "onset": {"Description": "Onset (in seconds) of the event, measured from the beginning of the acquisition of the first data point stored in the corresponding task data file."},
             "duration": {"Description": "Duration (in seconds) of the event, measured from the onset of the event."},
             "sample": {"Description": "Onset of the event according to the sampling scheme (frequency)."},
-            "trial_type": {"LongName": "Event category", 
-                           "Description": "Indicator of type of task action that occurs at the marked time", 
-                           "Levels": {k:descriptions[k] for k in self.events["trial_type"].unique()}},
+            "trial_type": {"LongName": "Event category",
+                           "Description": "Indicator of type of task action that occurs at the marked time",
+                           "Levels": {k: descriptions[k] for k in self.events["trial_type"].unique() if k in descriptions}},
             'experiment': {'Description': 'The experimental paradigm completed.'},
             "session": {"Description": "The session number."},
             "subject": {"LongName": "Subject ID",
@@ -131,15 +92,27 @@ class PS2_BIDS_converter(intracranial_BIDS_converter):
             "montage": {"Description": "The name of the electrode montage used for recording."},
             "protocol": {"Description": "The name of the experimental protocol used."},
             "stim_params": {"Description": "A dictionary containing the stimulation parameters for this event."},
+            "amplitude": {"Description": "Stimulation amplitude in μA."},
+            "anode_label": {"Description": "Label of the anode stimulation contact."},
+            "anode_number": {"Description": "Index of the anode stimulation contact."},
+            "cathode_label": {"Description": "Label of the cathode stimulation contact."},
+            "cathode_number": {"Description": "Index of the cathode stimulation contact."},
+            "burst_freq": {"Description": "Frequency of stimulation bursts in Hz."},
+            "n_bursts": {"Description": "Number of stimulation bursts delivered."},
+            "n_pulses": {"Description": "Number of stimulation pulses delivered."},
+            "pulse_freq": {"Description": "Frequency of stimulation pulses in Hz."},
+            "pulse_width": {"Description": "Width of each stimulation pulse in μs."},
+            "stim_duration": {"Description": "Duration of stimulation in ms."},
+            "stimulation": {"Description": "Indicator of whether stimulation was delivered during this event."},
         }
-        events_descriptor = {k:HED[k] for k in HED if k in self.events.columns}
+        events_descriptor = {k: HED[k] for k in HED if k in self.events.columns}
         return events_descriptor
-    
+
     # ---------- EEG ----------
     def eeg_sidecar(self, ref):
         sidecar = super().eeg_sidecar(ref)
         sidecar = pd.DataFrame(sidecar, index=[0])
-        sidecar.insert(1, 'TaskDescription', 'Stimulation experiment: subjects are asked to sit quietly while stimulation parameters are varied. For PS2.1, 4 amplitudes are used (up to a maximum amplitude set by the experimenter) and SHAM, 10Hz, 50Hz, 100 Hz, and 200Hz stimulation. Duration can be set to a fixed duration (500 ms default).')
+        sidecar.insert(1, 'TaskDescription', 'Stimulation experiment: subjects are asked to sit quietly while stimulation parameters are varied. 4 amplitudes are used (up to a maximum amplitude set by the experimenter) and SHAM, 10Hz, 50Hz, 100Hz, and 200Hz stimulation. Duration can be set to a fixed duration (500 ms default).')
         sidecar = sidecar.to_dict(orient='records')[0]
         sidecar['ElectricalStimulation'] = True
         return sidecar
