@@ -1,7 +1,8 @@
+#!/usr/bin/env python
+
 import argparse
 import cmlreaders as cml
 import pandas as pd
-import os
 from ScalpBIDSConverter import *
 import cmldask.CMLDask as da
 from dask.distributed import as_completed
@@ -46,6 +47,13 @@ def parse_args():
         help="Maximum number of subjects per experiment (default: no limit)",
     )
 
+    parser.add_argument(
+        "--sequential",
+        action="store_true",
+        default=True,
+        help="Run sequentially (no Dask / Slurm)",
+    )
+
     return parser.parse_args()
 
 
@@ -56,16 +64,16 @@ if __name__ == "__main__":
     subjects_to_exclude = set(args.exclude_subjects)
     max_subjects = args.max_subjects
 
-    print("Running with settings:")
+    print("\nRunning with settings:")
     print("Experiments:", experiments)
     print("Excluded subjects:", subjects_to_exclude)
     print("Max subjects per experiment:", max_subjects)
+    print("Sequential mode:", args.sequential)
+    print("--------------------------------------------------\n")
 
     df = cml.get_data_index()
 
     df_exp = df[df["experiment"].isin(experiments)].copy()
-
-    # Remove excluded subjects
     df_exp = df_exp[~df_exp["subject"].isin(subjects_to_exclude)].copy()
 
     dfs = []
@@ -87,28 +95,48 @@ if __name__ == "__main__":
 
     df_subset = pd.concat(dfs, ignore_index=True)
 
-    client = da.new_dask_client_slurm(
-        job_name="bids_convert",
-        memory_per_job="50GB",
-        max_n_jobs=10,
-        threads_per_job=1,
-        adapt=True,
-        log_directory="~/logs/",
-    )
-
     df_jobs = df_subset[["subject", "experiment", "session"]].copy()
 
-    futures = client.map(
-        convert_to_bids,
-        df_jobs["subject"].tolist(),
-        df_jobs["experiment"].tolist(),
-        df_jobs["session"].tolist(),
-    )
+    # ---------------- SEQUENTIAL MODE ----------------
+    if args.sequential:
+        print("Running SEQUENTIALLY (no Dask)\n")
 
-    for future in as_completed(futures):
-        try:
-            result = future.result()
-            print("✓ finished:", future.key)
-        except Exception as e:
-            print("✗ failed:", future.key)
-            print(e)
+        for _, row in df_jobs.iterrows():
+            try:
+                convert_to_bids(
+                    row["subject"],
+                    row["experiment"],
+                    row["session"],
+                )
+                print(f"✓ finished: {row['subject']} {row['experiment']} {row['session']}")
+            except Exception as e:
+                print(f"✗ failed: {row['subject']} {row['experiment']} {row['session']}")
+                print(e)
+
+    # ---------------- PARALLEL MODE ----------------
+    else:
+        print("Running in PARALLEL via Slurm+Dask\n")
+
+        client = da.new_dask_client_slurm(
+            job_name="bids_convert",
+            memory_per_job="50GB",
+            max_n_jobs=10,
+            threads_per_job=1,
+            adapt=True,
+            log_directory="~/logs/",
+        )
+
+        futures = client.map(
+            convert_to_bids,
+            df_jobs["subject"].tolist(),
+            df_jobs["experiment"].tolist(),
+            df_jobs["session"].tolist(),
+        )
+
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                print("✓ finished:", future.key)
+            except Exception as e:
+                print("✗ failed:", future.key)
+                print(e)
