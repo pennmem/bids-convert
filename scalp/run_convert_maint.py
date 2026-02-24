@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import argparse
+import os
 import cmlreaders as cml
 import pandas as pd
 from ScalpBIDSConverter import *
@@ -11,16 +12,44 @@ pd.options.display.max_columns = None
 pd.options.display.max_rows = 200
 
 
-def convert_to_bids(subject, experiment, session):
+def bids_session_outputs_exist(root, subject, experiment, session):
+    """
+    Decide whether this (subject, session, experiment) appears already converted.
+
+    We check for the presence of a couple of expected BIDS output files.
+    Adjust patterns here if your converter writes different filenames.
+    """
+    sub = f"sub-{subject}"
+    ses = f"ses-{session}"
+    eeg_dir = os.path.join(root, sub, ses, "eeg")
+
+    # Common BIDS EEG outputs (one of these typically exists if conversion happened)
+    candidates = [
+        os.path.join(eeg_dir, f"{sub}_{ses}_task-{experiment}_events.json"),
+        os.path.join(eeg_dir, f"{sub}_{ses}_task-{experiment}_events.tsv"),
+        os.path.join(eeg_dir, f"{sub}_{ses}_task-{experiment}_eeg.json"),
+        os.path.join(eeg_dir, f"{sub}_{ses}_task-{experiment}_eeg.tsv"),
+        os.path.join(eeg_dir, f"{sub}_{ses}_task-{experiment}_channels.tsv"),
+    ]
+    return any(os.path.exists(p) for p in candidates)
+
+
+def convert_to_bids(subject, experiment, session, root, overwrite_eeg, overwrite_beh, skip_if_exists):
+    """
+    Worker function. If skip_if_exists is True and outputs exist, skip.
+    """
+    if skip_if_exists and bids_session_outputs_exist(root, subject, experiment, session):
+        return f"SKIP existing outputs: {subject} {experiment} {session}"
+
     converter = ScalpBIDSConverter(
         subject,
         experiment,
         session,
-        root="/home1/maint/",
-        overwrite_eeg=True,
-        overwrite_beh=True,
+        root=root,
+        overwrite_eeg=overwrite_eeg,
+        overwrite_beh=overwrite_beh,
     )
-    return True
+    return f"DONE: {subject} {experiment} {session}"
 
 
 def parse_args():
@@ -50,8 +79,29 @@ def parse_args():
     parser.add_argument(
         "--sequential",
         action="store_true",
-        default=True,
+        default=False,
         help="Run sequentially (no Dask / Slurm)",
+    )
+
+    parser.add_argument(
+        "--root",
+        type=str,
+        default="/home1/maint/",
+        help="BIDS root directory (default: /home1/maint/)",
+    )
+
+    parser.add_argument(
+        "--overwrite-eeg",
+        action="store_true",
+        default=False,
+        help="Overwrite EEG outputs even if they already exist",
+    )
+
+    parser.add_argument(
+        "--overwrite-beh",
+        action="store_true",
+        default=False,
+        help="Overwrite behavioral outputs even if they already exist",
     )
 
     return parser.parse_args()
@@ -63,12 +113,20 @@ if __name__ == "__main__":
     experiments = args.experiments
     subjects_to_exclude = set(args.exclude_subjects)
     max_subjects = args.max_subjects
+    root = args.root
+
+    # Skip if exists unless user explicitly asked to overwrite something
+    skip_if_exists = not (args.overwrite_eeg or args.overwrite_beh)
 
     print("\nRunning with settings:")
     print("Experiments:", experiments)
     print("Excluded subjects:", subjects_to_exclude)
     print("Max subjects per experiment:", max_subjects)
     print("Sequential mode:", args.sequential)
+    print("Root:", root)
+    print("Overwrite EEG:", args.overwrite_eeg)
+    print("Overwrite BEH:", args.overwrite_beh)
+    print("Skip if exists:", skip_if_exists)
     print("--------------------------------------------------\n")
 
     df = cml.get_data_index()
@@ -77,24 +135,20 @@ if __name__ == "__main__":
     df_exp = df_exp[~df_exp["subject"].isin(subjects_to_exclude)].copy()
 
     dfs = []
-
     for exp in experiments:
         df_this = df_exp[df_exp["experiment"] == exp]
 
-        subjects = (
-            df_this["subject"]
-            .drop_duplicates()
-            .sort_values()
-        )
-
+        subjects = df_this["subject"].drop_duplicates().sort_values()
         if max_subjects is not None:
             subjects = subjects.head(max_subjects)
 
         df_keep = df_this[df_this["subject"].isin(subjects)].copy()
         dfs.append(df_keep)
 
-    df_subset = pd.concat(dfs, ignore_index=True)
+    if not dfs:
+        raise SystemExit("No jobs found after filtering experiments/subjects.")
 
+    df_subset = pd.concat(dfs, ignore_index=True)
     df_jobs = df_subset[["subject", "experiment", "session"]].copy()
 
     # ---------------- SEQUENTIAL MODE ----------------
@@ -102,15 +156,21 @@ if __name__ == "__main__":
         print("Running SEQUENTIALLY (no Dask)\n")
 
         for _, row in df_jobs.iterrows():
+            subject, experiment, session = row["subject"], row["experiment"], row["session"]
             try:
-                convert_to_bids(
-                    row["subject"],
-                    row["experiment"],
-                    row["session"],
+                msg = convert_to_bids(
+                    subject, experiment, session,
+                    root=root,
+                    overwrite_eeg=args.overwrite_eeg,
+                    overwrite_beh=args.overwrite_beh,
+                    skip_if_exists=skip_if_exists,
                 )
-                print(f"✓ finished: {row['subject']} {row['experiment']} {row['session']}")
+                if msg.startswith("SKIP"):
+                    print(f"↷ {msg}")
+                else:
+                    print(f"✓ {msg}")
             except Exception as e:
-                print(f"✗ failed: {row['subject']} {row['experiment']} {row['session']}")
+                print(f"✗ FAILED: {subject} {experiment} {session}")
                 print(e)
 
     # ---------------- PARALLEL MODE ----------------
@@ -131,12 +191,19 @@ if __name__ == "__main__":
             df_jobs["subject"].tolist(),
             df_jobs["experiment"].tolist(),
             df_jobs["session"].tolist(),
+            root=root,
+            overwrite_eeg=args.overwrite_eeg,
+            overwrite_beh=args.overwrite_beh,
+            skip_if_exists=skip_if_exists,
         )
 
         for future in as_completed(futures):
             try:
-                result = future.result()
-                print("✓ finished:", future.key)
+                msg = future.result()
+                if isinstance(msg, str) and msg.startswith("SKIP"):
+                    print(f"↷ {msg}")
+                else:
+                    print(f"✓ {msg}")
             except Exception as e:
                 print("✗ failed:", future.key)
                 print(e)
