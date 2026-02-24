@@ -27,7 +27,6 @@ class ScalpBIDSConverter:
             'actualvalue',
             'compensation',
             'eegfile',
-            # 'eegoffset', designed ot not be needed
             'eogArtifact',
             'experiment',
             'intruded',
@@ -37,7 +36,6 @@ class ScalpBIDSConverter:
             'itemvalue',
             'montage',
             'msoffset',
-            # 'mstime',
             'multiplier',
             'numingroupchosen',
             'phase',
@@ -59,7 +57,42 @@ class ScalpBIDSConverter:
             'task',
             'trial',
             'valuerecall',
-        ]
+        ],
+        "VCBehOnly": [
+            'actualvalue',
+            'compensation',
+            'eegfile',
+            'eogArtifact',
+            'experiment',
+            'intruded',
+            'intrusion',
+            'item',
+            'itemno',
+            'itemvalue',
+            'montage',
+            'msoffset',
+            'multiplier',
+            'numingroupchosen',
+            'phase',
+            'playerrotY',
+            'presX',
+            'presZ',
+            'primacybuf',
+            'protocol',
+            'recalled',
+            'rectime',
+            'recencybuf',
+            'serialpos',
+            'session',
+            'store',
+            'storeX',
+            'storeZ',
+            'storepointtype',
+            'subject',
+            'task',
+            'trial',
+            'valuerecall',
+        ],
     }
     # eegoffset,correctPointingDirection, eegfile, eogArtifact, finalrecalled, montage, msoffset, mstime, phase, protocol, submittedPointingDirection, type
     def __init__(self, subject, experiment, session, root="/scratch/PEERS_BIDS/",
@@ -178,7 +211,7 @@ class ScalpBIDSConverter:
                 self.wordpool_file = "wordpools/wasnorm_wordpool_less_exclusions.txt"
         elif np.isin(self.experiment, ["ltpFR2", "VFFR"]):
             self.wordpool_file = "wordpools/wasnorm_wordpool_576.txt"
-        elif np.isin(self.experiment, ["ValueCourier"]):
+        elif np.isin(self.experiment, ["ValueCourier", "VCBehOnly"]):
             self.wordpool_file = "wordpools/valuecourier_wordpool.txt"
         else:
             raise Exception("Wordpool not known for this experiment.")
