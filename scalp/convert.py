@@ -47,7 +47,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--experiment", "-e",
         required=True,
-        help="Experiment name (e.g., ltpFR, ltpFR2, VFFR, ValueCourier)."
+        help="Experiment name (e.g., ltpFR, ltpFR2, VFFR, ValueCourier, VCBehOnly)."
     )
     parser.add_argument(
         "--session", "-n",

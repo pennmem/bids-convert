@@ -22,9 +22,9 @@ def convert_to_bids(subject, experiment, session):
 if __name__ == "__main__":
     df = cml.get_data_index()
     max_subjects = 10
-    experiments = ["ValueCourier", "ltpFR", "ltpFR2", "VFFR"]
+    experiments = ["ValueCourier", "ltpFR", "ltpFR2", "VFFR", "VCBehOnly"]
 
-    subjects_to_exclude = {"LTP001"}  # <-- your list here
+    subjects_to_exclude = {"LTP001", "LTP9000", "LTP9001"}  # <-- your list here
 
     df = cml.get_data_index()
 
