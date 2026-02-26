@@ -100,7 +100,7 @@ def parse_args():
     parser.add_argument(
         "--root",
         type=str,
-        default="/home1/maint/",
+        default="/data/LTP_BIDS/",
         help="BIDS root directory (default: /home1/maint/)",
     )
 
