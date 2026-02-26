@@ -61,6 +61,20 @@ def parse_args():
         default=["ValueCourier", "ltpFR", "ltpFR2", "VFFR", "VCBehOnly"],
         help="Experiments to run (default: predefined list)",
     )
+    
+    parser.add_argument(
+        "--subject",
+        type=str,
+        default=None,
+        help="Single subject to convert",
+    )
+
+    parser.add_argument(
+        "--session",
+        type=int,
+        default=None,
+        help="Single session to convert",
+    )
 
     parser.add_argument(
         "--exclude-subjects",
@@ -150,6 +164,10 @@ if __name__ == "__main__":
 
     df_subset = pd.concat(dfs, ignore_index=True)
     df_jobs = df_subset[["subject", "experiment", "session"]].copy()
+    if args.subject is not None:
+        df_jobs = df_jobs[df_jobs["subject"] == args.subject]
+    if args.session is not None:
+        df_jobs = df_jobs[df_jobs["session"] == args.session]
 
     # ---------------- SEQUENTIAL MODE ----------------
     if args.sequential:
