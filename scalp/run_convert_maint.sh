@@ -2,7 +2,7 @@
 set -e
 
 # ---- USER CONFIG ----
-PYTHON_SCRIPT="~/bids-convert/scalp/convert_to_bids.py"
+PYTHON_SCRIPT="bids-convert/scalp/convert_to_bids.py"
 PYTHON_EXEC="/usr/global/miniconda/py310_23.1.0-1/envs/workshop_311/bin/python"
 LOG_DIR="$HOME/logs"
 ACTIVE_EXPERIMENTS_FILE="/data/eeg/scalp/ltp/ACTIVE_EXPERIMENTS.txt"
