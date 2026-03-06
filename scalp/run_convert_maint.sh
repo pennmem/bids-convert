@@ -2,7 +2,7 @@
 set -e
 
 # ---- USER CONFIG ----
-PYTHON_SCRIPT="scalp/run_convert_maint.py"
+PYTHON_SCRIPT="$(dirname "$(realpath "$0")")/run_convert_maint.py"
 PYTHON_EXEC="/usr/global/miniconda/py310_23.1.0-1/envs/workshop_311/bin/python"
 LOG_DIR="$HOME/logs"
 ACTIVE_EXPERIMENTS_FILE="/data/eeg/scalp/ltp/ACTIVE_EXPERIMENTS.txt"
