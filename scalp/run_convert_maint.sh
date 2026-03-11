@@ -51,13 +51,12 @@ for subj, sessions in data.items():
     for ses in sessions:
         print(f'{subj} {ses}')
 " | while read -r SUBJECT SESSION; do
-        echo "  -> $EXP / $SUBJECT / session $SESSION"
+        echo "  -> $EXP / $SUBJECT / session $SESSION / output root $OUTPUT_ROOT_BASE/$EXP"
         $PYTHON_EXEC $PYTHON_SCRIPT \
             --experiments "$EXP" \
             --subject "$SUBJECT" \
             --session "$SESSION" \
-            --root "$ROOT" \
-            --output_root "$OUTPUT_ROOT_BASE/$EXP" \
+            --root "$OUTPUT_ROOT_BASE/$EXP" \
             "$@" || echo "  ✗ FAILED: $SUBJECT $EXP $SESSION"
     done
 done
