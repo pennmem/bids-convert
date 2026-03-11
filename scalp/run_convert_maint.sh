@@ -7,6 +7,7 @@ PYTHON_EXEC="/usr/global/miniconda/py310_23.1.0-1/envs/workshop_311/bin/python"
 LOG_DIR="$HOME/logs"
 ACTIVE_EXPERIMENTS_FILE="/data/eeg/scalp/ltp/ACTIVE_EXPERIMENTS.txt"
 SCALP_DATA_ROOT="/data/eeg/scalp/ltp"
+OUTPUT_ROOT_BASE="/data/LTP_BIDS"
 # ---------------------
 
 mkdir -p "$LOG_DIR"
@@ -55,6 +56,8 @@ for subj, sessions in data.items():
             --experiments "$EXP" \
             --subject "$SUBJECT" \
             --session "$SESSION" \
+            --root "$ROOT" \
+            --output_root "$OUTPUT_ROOT_BASE/$EXP" \
             "$@" || echo "  ✗ FAILED: $SUBJECT $EXP $SESSION"
     done
 done
