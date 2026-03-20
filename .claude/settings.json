@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home1/eeg-validation/**)",
+      "Bash(grep -E '\\\\.\\(csv|txt\\)$')",
+      "Bash(grep -r \"unit_scale\\\\|microvolts\\\\|microvolt\\\\|gain\\\\|scale\\\\|V\\\\|units\" /home1/zrentala/bids-convert/intracranial/*.py)",
+      "Read(//home1/**)",
+      "Bash(grep -r \"250.*nV\\\\|nanovolts\\\\|250\\\\|0.1.*uV\" /home1/zrentala/bids-convert/intracranial/*.py)",
+      "Bash(grep -l \"eeg_mono_to_BIDS\\\\|eeg_bi_to_BIDS\\\\|unit_scale\" /home1/zrentala/bids-convert/intracranial/*/*.py)",
+      "Bash(wc -l /home1/zrentala/eeg-validation/ram_final_unit_convert_round/*.csv)",
+      "Read(//home1/zrentala/bids-convert/**)",
+      "Bash(/tmp/analyze_summary.txt:*)",
+      "Read(//tmp/**)",
+      "Bash(grep -r \"\\\\.iloc\\\\[0\\\\]\" /home1/zrentala/bids-convert/intracranial/*.py)",
+      "Bash(grep -r \"load_eeg\" /home1/zrentala/bids-convert/intracranial/*.py)",
+      "Bash(grep \",1.0$\" /home1/zrentala/bids-convert/intracranial/system_1_unit_conversions.csv)",
+      "Bash(python -c \"import cmlreaders; print\\(cmlreaders.__file__\\)\")",
+      "Read(//usr/global/**)",
+      "Read(//usr/local/lib/**)"
+    ]
+  }
+}

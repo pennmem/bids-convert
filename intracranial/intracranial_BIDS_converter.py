@@ -260,7 +260,7 @@ class intracranial_BIDS_converter:
         # MAY NEED EDGE CASES
         channels = pd.DataFrame({'name': np.array(self.pairs.label)})
         channels['type'] = [self.ELEC_TYPES_BIDS.get(x) for x in self.pairs.type_1]      # all pairs have same type
-        channels['units'] = 'V'
+        channels['units'] = 'uV'
         channels['low_cutoff'] = 'n/a'                 # highpass filter
         channels['high_cutoff'] = 'n/a'                # lowpass filter (mne adds Nyquist frequency = 2 x sampling rate)
         channels['reference'] = 'bipolar'
@@ -277,7 +277,7 @@ class intracranial_BIDS_converter:
         # MAY NEED EDGE CASES
         channels = pd.DataFrame({'name': np.array(self.contacts.label)})
         channels['type'] = [self.ELEC_TYPES_BIDS.get(x) for x in self.contacts.type]
-        channels['units'] = 'V'
+        channels['units'] = 'uV'
         channels['low_cutoff'] = 'n/a'
         channels['high_cutoff'] = 'n/a'
         channels['group'] = [re.sub('\d+', '', x) for x in self.contacts.label]
@@ -351,7 +351,7 @@ class intracranial_BIDS_converter:
     # ---------- EEG (monopolar) ----------
     def eeg_mono_to_BIDS(self):
         eeg = self.reader.load_eeg(scheme=self.contacts)
-        eeg.data = eeg.data / self.unit_scale              # convert to V before instantiating raw object
+        eeg.data = eeg.data / int(self.unit_scale / 1_000_000)             # convert to V before instantiating raw object
         eeg_mne = eeg.to_mne()
         mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_mono.type]))    # ecog or seeg
         eeg_mne.set_channel_types(mapping)                                                     # set channel types
@@ -361,7 +361,7 @@ class intracranial_BIDS_converter:
     # ---------- EEG (bipolar) ----------
     def eeg_bi_to_BIDS(self):
         eeg = self.reader.load_eeg(scheme=self.pairs)
-        eeg.data = eeg.data / self.unit_scale               # convert to V before instantiating raw object
+        eeg.data = eeg.data / int(self.unit_scale / 1_000_000)               # convert to uV before instantiating raw object
         eeg_mne = eeg.to_mne()
         mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_bi.type]))
         eeg_mne.set_channel_types(mapping)
