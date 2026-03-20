@@ -148,6 +148,10 @@ def run_job(
     subject, experiment, session, system_version, unit_scale,
     monopolar, bipolar, mni, tal, area, brain_regions, root
 ):
+    import sys, os
+    p = os.path.expanduser("~/bids-convert")
+    if p not in sys.path:
+        sys.path.insert(0, p)
     return convert_one_job(
         subject, experiment, int(session), float(system_version), float(unit_scale),
         monopolar=monopolar, bipolar=bipolar, mni=mni,
