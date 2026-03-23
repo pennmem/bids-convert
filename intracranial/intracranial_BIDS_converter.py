@@ -354,7 +354,11 @@ class intracranial_BIDS_converter:
         # Two-step conversion to avoid int16 precision loss from a single large divisor:
         #   Step 1: normalize raw units to 1 µV (e.g. divide by 10 for 0.1µV, by 4 for 250nV)
         #   Step 2: convert µV to V for MNE's internal representation
+        # Two-step conversion to preserve precision:
+        #   Step 1: normalize raw units to 1 µV (small divisor: 10 for 0.1µV, 4 for 250nV)
+        #   Step 2: convert µV to V for MNE (MNE's EDF exporter converts V->µV when writing)
         eeg.data = eeg.data / int(self.unit_scale / 1_000_000)               # raw units -> µV
+        eeg.data = eeg.data / 1_000_000                                      # µV -> V
 
         eeg_mne = eeg.to_mne()
         mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_mono.type]))    # ecog or seeg
@@ -366,6 +370,7 @@ class intracranial_BIDS_converter:
     def eeg_bi_to_BIDS(self):
         eeg = self.reader.load_eeg(scheme=self.pairs)
         eeg.data = eeg.data / int(self.unit_scale / 1_000_000)               # raw units -> µV
+        eeg.data = eeg.data / 1_000_000                                      # µV -> V
 
         eeg_mne = eeg.to_mne()
         mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_bi.type]))
