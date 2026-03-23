@@ -351,17 +351,22 @@ class intracranial_BIDS_converter:
     # ---------- EEG (monopolar) ----------
     def eeg_mono_to_BIDS(self):
         eeg = self.reader.load_eeg(scheme=self.contacts)
-        eeg.data = eeg.data / int(self.unit_scale / 1_000_000)             # convert to V before instantiating raw object
+        # Two-step conversion to avoid int16 precision loss from a single large divisor:
+        #   Step 1: normalize raw units to 1 µV (e.g. divide by 10 for 0.1µV, by 4 for 250nV)
+        #   Step 2: convert µV to V for MNE's internal representation
+        eeg.data = eeg.data / int(self.unit_scale / 1_000_000)               # raw units -> µV
+        eeg.data = eeg.data / 1_000_000                                      # µV -> V
         eeg_mne = eeg.to_mne()
         mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_mono.type]))    # ecog or seeg
         eeg_mne.set_channel_types(mapping)                                                     # set channel types
 
         return eeg_mne
-    
+
     # ---------- EEG (bipolar) ----------
     def eeg_bi_to_BIDS(self):
         eeg = self.reader.load_eeg(scheme=self.pairs)
-        eeg.data = eeg.data / int(self.unit_scale / 1_000_000)               # convert to uV before instantiating raw object
+        eeg.data = eeg.data / int(self.unit_scale / 1_000_000)               # raw units -> µV
+        eeg.data = eeg.data / 1_000_000                                      # µV -> V
         eeg_mne = eeg.to_mne()
         mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_bi.type]))
         eeg_mne.set_channel_types(mapping)
