@@ -305,7 +305,7 @@ class intracranial_BIDS_converter:
         sfreq = eeg.samplerate
         recording_duration = eeg.data.shape[-1] / sfreq
         return sfreq, recording_duration
-    
+    # blob:vscode-webview://1nao9csoaulpj1p7mubgic192ukh97s57s733a1227t712dsg7ba/bca3f58f-d070-4788-b29f-d787e3189f36
     def eeg_sidecar(self, ref):
         sidecar = {'TaskName': self.experiment}
         # call super and then add TaskDescription for each experiment
@@ -331,15 +331,15 @@ class intracranial_BIDS_converter:
         return sidecar
     
     def write_BIDS_ieeg(self, ref):
-        bids_path = self._BIDS_path().update(suffix='ieeg', extension='.edf', datatype='ieeg')
+        bids_path = self._BIDS_path().update(suffix='ieeg', extension='.bdf', datatype='ieeg')
 
         if ref == 'bipolar':
             bids_path = bids_path.update(acquisition='bipolar')
-            mne_bids.write_raw_bids(self.eeg_bi, bids_path=bids_path, events=None, allow_preload=True, format='EDF', overwrite=True)
+            mne_bids.write_raw_bids(self.eeg_bi, bids_path=bids_path, events=None, allow_preload=True, format='BDF', overwrite=True)
             mne_bids.update_sidecar_json(bids_path.update(extension='.json'), self.eeg_sidecar_bi)
         elif ref == 'monopolar':
             bids_path = bids_path.update(acquisition='monopolar')
-            mne_bids.write_raw_bids(self.eeg_mono, bids_path=bids_path, events=None, allow_preload=True, format='EDF', overwrite=True)
+            mne_bids.write_raw_bids(self.eeg_mono, bids_path=bids_path, events=None, allow_preload=True, format='BDF', overwrite=True)
             mne_bids.update_sidecar_json(bids_path.update(extension='.json'), self.eeg_sidecar_mono)
         
         # also write events
