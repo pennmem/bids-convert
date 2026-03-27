@@ -409,7 +409,10 @@ class intracranial_BIDS_converter:
         edf_path.unlink()
 
         # Update scans.tsv to reference .bdf instead of .edf
-        scans_tsv = self._BIDS_path().update(suffix='scans', extension='.tsv').fpath
+        scans_tsv = mne_bids.BIDSPath(
+            subject=self.subject, session=str(self.session),
+            suffix='scans', extension='.tsv', root=self.root,
+        ).fpath
         if scans_tsv.exists():
             scans = pd.read_csv(scans_tsv, sep='\t')
             scans['filename'] = scans['filename'].str.replace('.edf', '.bdf', regex=False)
