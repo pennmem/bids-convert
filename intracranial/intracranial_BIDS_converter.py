@@ -415,9 +415,8 @@ class intracranial_BIDS_converter:
             suffix='scans', extension='.tsv', root=self.root,
         ).fpath
         if scans_tsv.exists():
-            scans = pd.read_csv(scans_tsv, sep='\t')
-            scans['filename'] = scans['filename'].str.replace('.edf', '.bdf', regex=False)
-            scans.to_csv(scans_tsv, sep='\t', index=False)
+            text = scans_tsv.read_text()
+            scans_tsv.write_text(text.replace('.edf', '.bdf'))
         
         # also write events
         bids_path = self._BIDS_path().update(suffix='events', extension='.tsv', datatype='ieeg')
