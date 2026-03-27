@@ -394,16 +394,17 @@ class intracranial_BIDS_converter:
         if ref == 'bipolar':
             bids_path = bids_path.update(acquisition='bipolar')
             mne_bids.write_raw_bids(self.eeg_bi, bids_path=bids_path, events=None, allow_preload=True, format='EDF', overwrite=True)
+            edf_path = bids_path.fpath
             mne_bids.update_sidecar_json(bids_path.update(extension='.json'), self.eeg_sidecar_bi)
             raw = self.eeg_bi
         elif ref == 'monopolar':
             bids_path = bids_path.update(acquisition='monopolar')
             mne_bids.write_raw_bids(self.eeg_mono, bids_path=bids_path, events=None, allow_preload=True, format='EDF', overwrite=True)
+            edf_path = bids_path.fpath
             mne_bids.update_sidecar_json(bids_path.update(extension='.json'), self.eeg_sidecar_mono)
             raw = self.eeg_mono
 
         # Replace EDF with BDF for 24-bit precision
-        edf_path = bids_path.fpath
         bdf_path = edf_path.with_suffix('.bdf')
         self._export_bdf(raw, bdf_path)
         edf_path.unlink()
