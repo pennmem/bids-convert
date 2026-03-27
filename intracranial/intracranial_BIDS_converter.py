@@ -330,17 +330,90 @@ class intracranial_BIDS_converter:
             sidecar['SEEGChannelCount'] = len(self.contacts[(self.contacts.type=='D') | (self.contacts.type=='uD')].index)
         return sidecar
     
+    @staticmethod
+    def _export_bdf(raw, bdf_path):
+        """Export MNE Raw to BDF (24-bit) for higher precision than EDF (16-bit).
+
+        BDF uses 24-bit integers (16,777,214 levels vs EDF's 65,534),
+        giving 256x more precision and eliminating quantization errors
+        for subjects recorded at fine resolution (0.1 µV, 250 nV).
+        """
+        from EDFlib.edfwriter import EDFwriter
+        from mne.export._edf import _auto_close, _try_to_set_value
+
+        units = dict(
+            eeg="uV", ecog="uV", seeg="uV", eog="uV",
+            ecg="uV", emg="uV", bio="uV", dbs="uV",
+        )
+        digital_min, digital_max = -8388607, 8388607
+
+        raw.load_data()
+        ch_names = raw.ch_names
+        ch_types = np.array(raw.get_channel_types(picks=ch_names))
+        n_channels = len(ch_names)
+        sfreq = raw.info["sfreq"]
+        out_sfreq = int(sfreq) if float(sfreq).is_integer() else int(np.floor(sfreq))
+        data = raw.get_data(units=units, picks=ch_names)
+
+        # physical range per channel type
+        ch_types_phys_max, ch_types_phys_min = {}, {}
+        for _type in np.unique(ch_types):
+            _picks = np.nonzero(ch_types == _type)[0]
+            ch_types_phys_max[_type] = data[_picks].max()
+            ch_types_phys_min[_type] = data[_picks].min()
+
+        file_type = EDFwriter.EDFLIB_FILETYPE_BDFPLUS
+        with _auto_close(EDFwriter(str(bdf_path), file_type, n_channels)) as hdl:
+            for idx, ch in enumerate(ch_names):
+                ch_type = ch_types[idx]
+                for key, val in [
+                    ("PhysicalMaximum", ch_types_phys_max[ch_type]),
+                    ("PhysicalMinimum", ch_types_phys_min[ch_type]),
+                    ("DigitalMaximum", digital_max),
+                    ("DigitalMinimum", digital_min),
+                    ("PhysicalDimension", "uV"),
+                    ("SampleFrequency", out_sfreq),
+                    ("SignalLabel", ch),
+                ]:
+                    _try_to_set_value(hdl, key, val, channel_index=idx)
+
+            meas_date = raw.info["meas_date"]
+            if meas_date is not None:
+                hdl.setStartDateTime(
+                    meas_date.year, meas_date.month, meas_date.day,
+                    meas_date.hour, meas_date.minute, meas_date.second,
+                )
+
+            for idx in range(n_channels):
+                hdl.writeSamples(data[idx])
+
     def write_BIDS_ieeg(self, ref):
-        bids_path = self._BIDS_path().update(suffix='ieeg', extension='.bdf', datatype='ieeg')
+        # Write EDF first to generate all BIDS sidecars (channels.tsv, scans.tsv, etc.)
+        bids_path = self._BIDS_path().update(suffix='ieeg', extension='.edf', datatype='ieeg')
 
         if ref == 'bipolar':
             bids_path = bids_path.update(acquisition='bipolar')
-            mne_bids.write_raw_bids(self.eeg_bi, bids_path=bids_path, events=None, allow_preload=True, format='BDF', overwrite=True)
+            mne_bids.write_raw_bids(self.eeg_bi, bids_path=bids_path, events=None, allow_preload=True, format='EDF', overwrite=True)
             mne_bids.update_sidecar_json(bids_path.update(extension='.json'), self.eeg_sidecar_bi)
+            raw = self.eeg_bi
         elif ref == 'monopolar':
             bids_path = bids_path.update(acquisition='monopolar')
-            mne_bids.write_raw_bids(self.eeg_mono, bids_path=bids_path, events=None, allow_preload=True, format='BDF', overwrite=True)
+            mne_bids.write_raw_bids(self.eeg_mono, bids_path=bids_path, events=None, allow_preload=True, format='EDF', overwrite=True)
             mne_bids.update_sidecar_json(bids_path.update(extension='.json'), self.eeg_sidecar_mono)
+            raw = self.eeg_mono
+
+        # Replace EDF with BDF for 24-bit precision
+        edf_path = bids_path.fpath
+        bdf_path = edf_path.with_suffix('.bdf')
+        self._export_bdf(raw, bdf_path)
+        edf_path.unlink()
+
+        # Update scans.tsv to reference .bdf instead of .edf
+        scans_tsv = self._BIDS_path().update(suffix='scans', extension='.tsv').fpath
+        if scans_tsv.exists():
+            scans = pd.read_csv(scans_tsv, sep='\t')
+            scans['filename'] = scans['filename'].str.replace('.edf', '.bdf', regex=False)
+            scans.to_csv(scans_tsv, sep='\t', index=False)
         
         # also write events
         bids_path = self._BIDS_path().update(suffix='events', extension='.tsv', datatype='ieeg')
