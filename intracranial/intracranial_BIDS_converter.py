@@ -384,8 +384,17 @@ class intracranial_BIDS_converter:
                     meas_date.hour, meas_date.minute, meas_date.second,
                 )
 
-            for idx in range(n_channels):
-                hdl.writeSamples(data[idx])
+            # Write data in blocks of out_sfreq samples (1 data record each).
+            # EDFlib expects: for each block, write all channels sequentially.
+            n_times = data.shape[1]
+            n_blocks = int(np.ceil(n_times / out_sfreq))
+            for block in range(n_blocks):
+                start = block * out_sfreq
+                end = min((block + 1) * out_sfreq, n_times)
+                for ch in range(n_channels):
+                    buf = np.zeros(out_sfreq, dtype=np.float64)
+                    buf[:end - start] = data[ch, start:end]
+                    hdl.writeSamples(buf)
 
     def write_BIDS_ieeg(self, ref):
         # Write EDF first to generate all BIDS sidecars (channels.tsv, scans.tsv, etc.)
