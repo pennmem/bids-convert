@@ -347,6 +347,15 @@ class intracranial_BIDS_converter:
             mne_bids.update_sidecar_json(bids_path.update(extension='.json'), self.eeg_sidecar_mono)
             raw = self.eeg_mono
 
+        # Remove auto-generated coordsystem/electrodes files from write_raw_bids.
+        # These lack the space entity and conflict with the ones we write explicitly
+        # via write_BIDS_electrodes / write_BIDS_coords.
+        ieeg_dir = edf_path.parent
+        for suffix in ("coordsystem.json", "electrodes.tsv"):
+            auto = ieeg_dir / f"sub-{self.subject}_ses-{self.session}_acq-{ref}_{suffix}"
+            if auto.exists():
+                auto.unlink()
+
         # Replace EDF with BDF for 24-bit precision
         bdf_path = edf_path.with_suffix('.bdf')
         raw.export(bdf_path, overwrite=True)
