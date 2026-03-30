@@ -331,16 +331,34 @@ class intracranial_BIDS_converter:
         return sidecar
     
     def write_BIDS_ieeg(self, ref):
-        bids_path = self._BIDS_path().update(suffix='ieeg', extension='.bdf', datatype='ieeg')
+        # Write EDF first to generate all BIDS sidecars
+        bids_path = self._BIDS_path().update(suffix='ieeg', extension='.edf', datatype='ieeg')
 
         if ref == 'bipolar':
             bids_path = bids_path.update(acquisition='bipolar')
-            mne_bids.write_raw_bids(self.eeg_bi, bids_path=bids_path, events=None, allow_preload=True, format='BDF', overwrite=True)
+            mne_bids.write_raw_bids(self.eeg_bi, bids_path=bids_path, events=None, allow_preload=True, format='EDF', overwrite=True)
             mne_bids.update_sidecar_json(bids_path.update(extension='.json'), self.eeg_sidecar_bi)
+            raw = self.eeg_bi
         elif ref == 'monopolar':
             bids_path = bids_path.update(acquisition='monopolar')
-            mne_bids.write_raw_bids(self.eeg_mono, bids_path=bids_path, events=None, allow_preload=True, format='BDF', overwrite=True)
+            mne_bids.write_raw_bids(self.eeg_mono, bids_path=bids_path, events=None, allow_preload=True, format='EDF', overwrite=True)
             mne_bids.update_sidecar_json(bids_path.update(extension='.json'), self.eeg_sidecar_mono)
+            raw = self.eeg_mono
+
+        # Replace EDF with BDF for 24-bit precision
+        edf_path = bids_path.fpath
+        bdf_path = edf_path.with_suffix('.bdf')
+        raw.export(bdf_path, overwrite=True)
+        edf_path.unlink()
+
+        # Update scans.tsv to reference .bdf instead of .edf
+        scans_tsv = mne_bids.BIDSPath(
+            subject=self.subject, session=str(self.session),
+            suffix='scans', extension='.tsv', root=self.root,
+        ).fpath
+        if scans_tsv.exists():
+            text = scans_tsv.read_text()
+            scans_tsv.write_text(text.replace('.edf', '.bdf'))
         
         # also write events
         bids_path = self._BIDS_path().update(suffix='events', extension='.tsv', datatype='ieeg')
