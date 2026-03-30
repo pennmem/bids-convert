@@ -102,7 +102,7 @@ class intracranial_BIDS_converter:
             path = f'/data10/RAM/subjects/{self.subject}/behavioral/{self.experiment}/session_{self.session}/elemem/{pf.find("elemem_session_folder")}/'
             config_files = glob(path + f'{self.subject}*.csv')       # maybe should specificy "mono" in pattern match
             if len(config_files) == 1:                               # config files don't have consisten names, but want the monopolar (not bipolar) config
-                areas = pd.read_csv(config_files[0], names=['label', 'index', 'area'], header=None)
+                areas = pd.read_csv(config_files[0], names=['label', 'index', 'area'], header=None, usecols=[0, 1, 2], on_bad_lines='skip')
                 contacts = reader.load('contacts')
                 area = pd.merge(areas, contacts)[['label', 'area']]
 
@@ -258,7 +258,10 @@ class intracranial_BIDS_converter:
     # convert CML pairs to BIDS channels (bipolar)
     def pairs_to_channels(self):
         # MAY NEED EDGE CASES
-        channels = pd.DataFrame({'name': np.array(self.pairs.label)})
+        labels = np.array(self.pairs.label)
+        # Truncate names that exceed the 16-char EDF/BDF limit
+        truncated = [self._truncate_bipolar(n) if len(n) > 16 else n for n in labels]
+        channels = pd.DataFrame({'name': truncated})
         channels['type'] = [self.ELEC_TYPES_BIDS.get(x) for x in self.pairs.type_1]      # all pairs have same type
         channels['units'] = 'uV'
         channels['low_cutoff'] = 'n/a'                 # highpass filter
@@ -288,6 +291,32 @@ class intracranial_BIDS_converter:
         channels = channels.replace('', 'n/a')         # resolve empty cell issue
         return channels
     
+    def write_BIDS_channelmap(self, ref):
+        """Write a mapping of original to truncated channel names if any were shortened."""
+        original_labels = np.array(self.pairs.label)
+        truncated_labels = [self._truncate_bipolar(n) if len(n) > 16 else n for n in original_labels]
+
+        renamed = [(orig, trunc) for orig, trunc in zip(original_labels, truncated_labels) if orig != trunc]
+        if not renamed:
+            return
+
+        mapping_df = pd.DataFrame(renamed, columns=['original_name', 'truncated_name'])
+        bids_path = self._BIDS_path().update(
+            suffix='channelmap', extension='.tsv', datatype='ieeg',
+            acquisition=ref,
+        )
+        self._to_tsv(mapping_df, bids_path.fpath)
+
+        # Ensure .bidsignore includes channelmap files
+        bidsignore = os.path.join(self.root, '.bidsignore')
+        pattern = '**/*_channelmap.tsv'
+        existing = set()
+        if os.path.exists(bidsignore):
+            existing = set(open(bidsignore).read().splitlines())
+        if pattern not in existing:
+            with open(bidsignore, 'a') as f:
+                f.write(pattern + '\n')
+
     def write_BIDS_channels(self, ref):
         bids_path = self._BIDS_path().update(suffix='channels', extension='.tsv', datatype='ieeg')
 
@@ -356,9 +385,16 @@ class intracranial_BIDS_converter:
             if auto.exists():
                 auto.unlink()
 
-        # Replace EDF with BDF for 24-bit precision
+        # Replace EDF with BDF for 24-bit precision.
         bdf_path = edf_path.with_suffix('.bdf')
-        raw.export(bdf_path, overwrite=True)
+        try:
+            raw.export(bdf_path, overwrite=True)
+        except Exception:
+            # BDF requires signal duration to be exactly divisible by the data
+            # record duration.  Crop to the last full second and retry.
+            full_seconds = int(raw.times[-1])
+            raw = raw.copy().crop(tmax=full_seconds)
+            raw.export(bdf_path, overwrite=True)
         edf_path.unlink()
 
         # Update scans.tsv to reference .bdf instead of .edf
@@ -395,12 +431,70 @@ class intracranial_BIDS_converter:
         return eeg_mne
 
     # ---------- EEG (bipolar) ----------
+    @staticmethod
+    def _shorten_label(label, max_len):
+        """Shorten a contact label to max_len, preserving trailing digits."""
+        if len(label) <= max_len:
+            return label
+        m = re.match(r'^(.*?)(\d+)$', label)
+        if m:
+            prefix, digits = m.group(1), m.group(2)
+            return prefix[:max_len - len(digits)] + digits
+        return label[:max_len]
+
+    @classmethod
+    def _split_bipolar(cls, name):
+        """Split a bipolar label into (contact1, separator, contact2).
+
+        Handles edge cases:
+          - underscore separators:  B'micro1_B'micro2
+          - hyphens inside labels: RP-THAL1-RP-THAL2
+        """
+        # Try underscore separator first (e.g. B'micro1_B'micro2)
+        if '_' in name:
+            idx = name.index('_')
+            return name[:idx], '_', name[idx + 1:]
+
+        # For hyphens, find the split where both halves end with a digit
+        positions = [i for i, c in enumerate(name) if c == '-']
+        for pos in sorted(positions, key=lambda p: abs(p - len(name) / 2)):
+            left, right = name[:pos], name[pos + 1:]
+            if left and right and left[-1].isdigit() and right[-1].isdigit():
+                return left, '-', right
+
+        # Fallback: split at first hyphen
+        if '-' in name:
+            idx = name.index('-')
+            return name[:idx], '-', name[idx + 1:]
+
+        return name, '', ''
+
+    @classmethod
+    def _truncate_bipolar(cls, name):
+        """Truncate a bipolar channel name to 16 chars, preserving trailing digits."""
+        left, sep, right = cls._split_bipolar(name)
+        if not sep:
+            return cls._shorten_label(name, 16)
+        max_half = (16 - len(sep)) // 2  # 7 for '-'/'_'
+        return cls._shorten_label(left, max_half) + sep + cls._shorten_label(right, max_half)
+
+    @classmethod
+    def _truncate_channel_names(cls, raw_mne):
+        """Shorten channel names that exceed the 16-char EDF/BDF limit."""
+        renames = {}
+        for name in raw_mne.ch_names:
+            if len(name) > 16:
+                renames[name] = cls._truncate_bipolar(name)
+        if renames:
+            raw_mne.rename_channels(renames)
+
     def eeg_bi_to_BIDS(self):
         eeg = self.reader.load_eeg(scheme=self.pairs)
         eeg.data = eeg.data / int(self.unit_scale)               # raw units -> V
         # eeg.data = eeg.data / 1_000_000                                      # µV -> V
 
         eeg_mne = eeg.to_mne()
+        self._truncate_channel_names(eeg_mne)
         mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_bi.type]))
         eeg_mne.set_channel_types(mapping)
 
@@ -426,18 +520,26 @@ class intracranial_BIDS_converter:
         # ---------- Electrodes ----------
         self.contacts = self.load_contacts()
 
+        # Check which coordinate systems are actually available
+        has_mni = self.mni and 'mni.x' in self.contacts.columns
+        has_tal = self.tal and 'tal.x' in self.contacts.columns
+        if self.mni and not has_mni:
+            print(f"WARNING: MNI coordinates missing for {self.subject} — skipping MNI output")
+        if self.tal and not has_tal:
+            print(f"WARNING: Talairach coordinates missing for {self.subject} — skipping Tal output")
+
         # both MNI and Talairach
-        if self.mni and self.tal:
+        if has_mni and has_tal:
             self.electrodes = self.contacts_to_electrodes('mni', True)
             self.electrodes_sidecar = self.make_electrodes_sidecar('mni', True)
             self.write_BIDS_electrodes('mni', True)
             self.write_BIDS_coords('mni')
-        elif self.mni:
+        elif has_mni:
             self.electrodes_mni = self.contacts_to_electrodes('mni', False)
             self.electrodes_sidecar = self.make_electrodes_sidecar('mni', False)
             self.write_BIDS_electrodes('mni', False)
             self.write_BIDS_coords('mni')
-        elif self.tal:
+        elif has_tal:
             self.electrodes_tal = self.contacts_to_electrodes('tal', False)
             self.electrodes_sidecar = self.make_electrodes_sidecar('tal', False)
             self.write_BIDS_electrodes('tal', False)
@@ -456,6 +558,7 @@ class intracranial_BIDS_converter:
             self.eeg_bi = self.eeg_bi_to_BIDS()
             self.write_BIDS_ieeg('bipolar')
             self.write_BIDS_channels('bipolar')          # write bipolar channels to BIDS format (overwrite automatic)
+            self.write_BIDS_channelmap('bipolar')        # log any truncated channel names
         if self.monopolar:
             self.eeg_sidecar_mono = self.eeg_sidecar('monopolar')
             self.eeg_mono = self.eeg_mono_to_BIDS()
