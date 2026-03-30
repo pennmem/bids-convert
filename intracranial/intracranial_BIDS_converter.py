@@ -386,14 +386,21 @@ class intracranial_BIDS_converter:
                 auto.unlink()
 
         # Replace EDF with BDF for 24-bit precision.
+        # BDF requires signal duration to be exactly divisible by the data
+        # record duration (n_samples_per_record / sfreq).  Crop to the last
+        # complete data record to avoid export failures.
         bdf_path = edf_path.with_suffix('.bdf')
         try:
             raw.export(bdf_path, overwrite=True)
         except Exception:
-            # BDF requires signal duration to be exactly divisible by the data
-            # record duration.  Crop to the last full second and retry.
-            full_seconds = int(raw.times[-1])
-            raw = raw.copy().crop(tmax=full_seconds)
+            sfreq = raw.info['sfreq']
+            n_samples = len(raw.times)
+            # BDF default: 1 data record = round(sfreq) samples
+            samples_per_record = round(sfreq)
+            full_records = n_samples // samples_per_record
+            keep_samples = int(full_records * samples_per_record)
+            tmax = (keep_samples - 1) / sfreq
+            raw = raw.copy().crop(tmax=tmax)
             raw.export(bdf_path, overwrite=True)
         edf_path.unlink()
 
