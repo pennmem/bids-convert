@@ -102,9 +102,7 @@ if __name__ == "__main__":
         log_directory="~/logs/",
     )
     conversion_df = pd.read_csv('system_1_unit_conversions.csv')
-    # df_jobs = df_subset[["subject", "experiment", "session"]].copy()
-
-    # conversion_df = pd.read_csv("system_1_unit_conversions.csv")
+    df_jobs = df_subset[["subject", "experiment", "session", "system_version"]].copy()
 
     # Normalize dtypes (session often mismatches int vs str)
     df_jobs["session"] = df_jobs["session"].astype(int)
@@ -117,19 +115,76 @@ if __name__ == "__main__":
         conversion_df[merge_keys + ["system_version", "conversion_to_V"]],
         on=merge_keys,
         how="left",
+        suffixes=("_idx", "_csv"),
     )
 
-    # Drop non-matching rows
-    missing = df_jobs2["system_version"].isna() | df_jobs2["conversion_to_V"].isna()
-    if missing.any():
-        print(f"Skipping {missing.sum()} job(s) with no matching conversion row:")
-        print(df_jobs2.loc[missing, merge_keys].to_string(index=False))
+    # Use CSV system_version where available, fall back to data index
+    df_jobs2["system_version"] = df_jobs2["system_version_csv"].fillna(df_jobs2["system_version_idx"]).astype(float)
+    df_jobs2.drop(columns=["system_version_csv", "system_version_idx"], inplace=True)
 
-    df_jobs2 = df_jobs2.loc[~missing].copy()
+    # Use conversion_to_V from CSV where available, default to 1 (no conversion) otherwise
+    df_jobs2["unit_scale"] = df_jobs2["conversion_to_V"].fillna(1.0).astype(float)
 
-    # Per-job parameters
-    df_jobs2["system_version"] = df_jobs2["system_version"].astype(float)
-    df_jobs2["unit_scale"] = df_jobs2["conversion_to_V"].astype(float)
+    missing_csv = df_jobs2["conversion_to_V"].isna()
+    if missing_csv.any():
+        print(f"{missing_csv.sum()} job(s) missing from conversion CSV — "
+              f"unit_scale set to 1 (no unit conversion):")
+        print(df_jobs2.loc[missing_csv, merge_keys + ["system_version", "unit_scale"]].to_string(index=False))
+
+    # # Infer unit_scale by reading EEG when conversion_to_V is missing
+    # def _infer_unit_scale_from_eeg(subject, experiment, session):
+    #     """Load a small EEG snippet and infer the power-of-10 unit scale.
+    #
+    #     Typical iEEG amplitudes are ~50-200 µV (5e-5 to 2e-4 V).
+    #     We use a target median of ~100 µV = 1e-4 V.
+    #     If the raw median absolute value is M, then unit_scale = M / 1e-4,
+    #     rounded to the nearest power of 10.
+    #     """
+    #     try:
+    #         df_idx = cml.get_data_index('r1', '/')
+    #         sel = df_idx.query(
+    #             "subject==@subject & experiment==@experiment & session==@session"
+    #         ).iloc[0]
+    #         reader = cml.CMLReader(
+    #             subject=sel.subject, experiment=sel.experiment,
+    #             session=sel.session, localization=sel.localization,
+    #             montage=sel.montage,
+    #         )
+    #         eeg = reader.load_eeg()
+    #         # Use first 5 seconds (or less) to keep it fast
+    #         n_samples = min(eeg.data.shape[-1], int(eeg.samplerate * 5))
+    #         snippet = eeg.data[:, :n_samples].astype(float)
+    #         median_abs = np.median(np.abs(snippet[snippet != 0]))
+    #         if median_abs == 0 or np.isnan(median_abs):
+    #             return 1_000_000.0
+    #         # target: 100 µV = 1e-4 V
+    #         raw_scale = median_abs / 1e-4
+    #         # round to nearest power of 10
+    #         power = round(np.log10(raw_scale))
+    #         unit_scale = 10.0 ** power
+    #         print(f"  {subject} {experiment} ses-{session}: "
+    #               f"median|raw|={median_abs:.2g} -> unit_scale={unit_scale:.0e}")
+    #         return unit_scale
+    #     except Exception as e:
+    #         print(f"  {subject} {experiment} ses-{session}: "
+    #               f"EEG read failed ({e}), defaulting to 1e6")
+    #         return 1_000_000.0
+    #
+    # def _infer_unit_scale(row):
+    #     if pd.notna(row["conversion_to_V"]):
+    #         return float(row["conversion_to_V"])
+    #     return _infer_unit_scale_from_eeg(
+    #         row["subject"], row["experiment"], int(row["session"])
+    #     )
+    #
+    # missing_csv = df_jobs2["conversion_to_V"].isna()
+    # if missing_csv.any():
+    #     print(f"Inferring unit_scale from EEG for {missing_csv.sum()} job(s) "
+    #           f"missing from conversion CSV:")
+    # df_jobs2["unit_scale"] = df_jobs2.apply(_infer_unit_scale, axis=1)
+    #
+    # if missing_csv.any():
+    #     print(df_jobs2.loc[missing_csv, merge_keys + ["system_version", "unit_scale"]].to_string(index=False))
 
     print("Jobs to run:", len(df_jobs2))
     print(df_jobs2.head())
