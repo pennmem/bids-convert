@@ -178,7 +178,7 @@ if __name__ == "__main__":
             try:
                 msg = convert_to_bids(
                     subject, experiment, session,
-                    root=root,
+                    root=root + f"/{experiment}/",
                     overwrite_eeg=args.overwrite_eeg,
                     overwrite_beh=args.overwrite_beh,
                     skip_if_exists=skip_if_exists,
@@ -204,12 +204,14 @@ if __name__ == "__main__":
             log_directory="~/logs/",
         )
 
+        roots = [root + f"/{exp}/" for exp in df_jobs["experiment"].tolist()]
+
         futures = client.map(
             convert_to_bids,
             df_jobs["subject"].tolist(),
             df_jobs["experiment"].tolist(),
             df_jobs["session"].tolist(),
-            root=root,
+            roots,
             overwrite_eeg=args.overwrite_eeg,
             overwrite_beh=args.overwrite_beh,
             skip_if_exists=skip_if_exists,
