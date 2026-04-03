@@ -182,28 +182,28 @@ def build_jobs(
         else:
             return pd.DataFrame(columns=["subject", "experiment", "session", "system_version", "unit_scale"])
 
-    df_jobs = df[["subject", "experiment", "session"]].copy()
+    df_jobs = df[["subject", "experiment", "session", "system_version"]].copy()
     df_jobs["session"] = df_jobs["session"].astype(int)
+    # system_version from the data index (always available)
+    df_jobs["system_version"] = df_jobs["system_version"].astype(float)
     conversion_df["session"] = conversion_df["session"].astype(int)
 
     merge_keys = ["subject", "experiment", "session"]
     df_jobs2 = df_jobs.merge(
-        conversion_df[merge_keys + ["system_version", "conversion_to_V"]],
+        conversion_df[merge_keys + ["conversion_to_V"]],
         on=merge_keys,
         how="left",
     )
 
-    missing = df_jobs2["system_version"].isna() | df_jobs2["conversion_to_V"].isna()
+    # For sessions not in the CSV, use the default unit_scale (1e6)
+    missing = df_jobs2["conversion_to_V"].isna()
     if missing.any():
         print(
-            f"WARNING: Skipping {missing.sum()} job(s) not found in the conversion CSV.\n"
-            f"  Add the following rows to system_1_unit_conversions.csv "
-            f"(columns: subject, experiment, session, system_version, conversion_to_V):"
+            f"NOTE: {missing.sum()} job(s) not found in the conversion CSV — "
+            f"using default unit_scale=1e6 (1 µV)."
         )
-        print(df_jobs2.loc[missing, merge_keys].to_string(index=False))
+        df_jobs2.loc[missing, "conversion_to_V"] = 1e6
 
-    df_jobs2 = df_jobs2.loc[~missing].copy()
-    df_jobs2["system_version"] = df_jobs2["system_version"].astype(float)
     df_jobs2["unit_scale"] = df_jobs2["conversion_to_V"].astype(float)
 
     return df_jobs2
