@@ -63,6 +63,12 @@ def lookup_conversion_params(conversion_df: pd.DataFrame, subject: str, experime
     return float(r0["system_version"]), float(r0["conversion_to_V"])
 
 
+def session_exists(root: str, subject: str, session: int) -> bool:
+    """Check whether a session directory already exists in the BIDS root."""
+    session_dir = os.path.join(root, f"sub-{subject}", f"ses-{session}")
+    return os.path.isdir(session_dir)
+
+
 def convert_one_job(
     subject: str,
     experiment: str,
@@ -77,7 +83,12 @@ def convert_one_job(
     area: bool,
     brain_regions: dict,
     root: str,
+    override: bool = False,
 ):
+    if not override and session_exists(root, subject, session):
+        print(f"SKIP: session already exists at {root}/sub-{subject}/ses-{session}/ (use --override to reconvert)")
+        return True
+
     Converter = _get_converter(experiment)
 
     converter = Converter(
@@ -146,7 +157,7 @@ def build_jobs(
 # Top-level function for Dask mapping (avoid lambda/pickle weirdness)
 def run_job(
     subject, experiment, session, system_version, unit_scale,
-    monopolar, bipolar, mni, tal, area, brain_regions, root
+    monopolar, bipolar, mni, tal, area, brain_regions, root, override
 ):
     import sys, os
     p = os.path.expanduser("~/bids-convert")
@@ -158,6 +169,7 @@ def run_job(
         tal=tal, area=area,
         brain_regions=brain_regions,
         root=root,
+        override=override,
     )
 
 
@@ -260,6 +272,8 @@ def main():
                     help="Run BIDS validation on the output directory after conversion.")
     ap.add_argument("--validate-only", action="store_true", default=False,
                     help="Skip conversion and only run BIDS validation on --root.")
+    ap.add_argument("--override", action="store_true", default=False,
+                    help="Re-convert sessions even if they already exist in --root.")
 
     # single mode args
     ap.add_argument("--subject")
@@ -321,6 +335,7 @@ def main():
             tal=args.tal, area=args.area,
             brain_regions=brain_regions,
             root=args.root,
+            override=args.override,
         )
         if args.validate:
             valid = validate_bids_output(args.root)
@@ -364,6 +379,7 @@ def main():
                     area=args.area,
                     brain_regions=brain_regions,
                     root=args.root,
+                    override=args.override,
                 )
                 n_ok += 1
                 print("✓ finished")
@@ -409,6 +425,7 @@ def main():
         [args.area] * len(df_jobs2),
         [brain_regions] * len(df_jobs2),
         [args.root] * len(df_jobs2),
+        [args.override] * len(df_jobs2),
     )
 
     n_ok = 0
