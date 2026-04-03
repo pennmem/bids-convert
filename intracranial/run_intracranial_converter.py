@@ -69,6 +69,29 @@ def session_exists(root: str, subject: str, session: int) -> bool:
     return os.path.isdir(session_dir)
 
 
+def parse_sessions(spec_list: list[str], available_sessions: list[int]) -> list[int]:
+    """Parse session specifiers into a list of session ints.
+
+    Each specifier can be:
+      - A single int:   "3"   -> [3]
+      - A slice string: "0:5" -> sessions 0..4, ":3" -> 0..2, "2:" -> 2..max
+
+    Slice semantics follow Python slicing applied to the sorted list of
+    available sessions.
+    """
+    available = sorted(available_sessions)
+    result = set()
+    for spec in spec_list:
+        if ":" in spec:
+            parts = spec.split(":", 1)
+            start = int(parts[0]) if parts[0] else None
+            stop = int(parts[1]) if parts[1] else None
+            result.update(available[start:stop])
+        else:
+            result.add(int(spec))
+    return sorted(result)
+
+
 def convert_one_job(
     subject: str,
     experiment: str,
@@ -78,9 +101,6 @@ def convert_one_job(
     *,
     monopolar: bool,
     bipolar: bool,
-    mni: bool,
-    tal: bool,
-    area: bool,
     brain_regions: dict,
     root: str,
     override: bool = False,
@@ -94,7 +114,10 @@ def convert_one_job(
     converter = Converter(
         subject, experiment, session,
         system_version, unit_scale,
-        monopolar, bipolar, mni, tal, area,
+        monopolar, bipolar,
+        True,   # mni
+        False,  # tal
+        False,  # area
         brain_regions,
         root=root,
     )
@@ -103,31 +126,63 @@ def convert_one_job(
 
 def build_jobs(
     *,
-    experiments: list[str],
+    subjects: list[str] | None,
+    experiments: list[str] | None,
+    sessions_spec: list[str] | None,
     max_subjects: int,
     subjects_to_exclude: set[str],
     conversion_df: pd.DataFrame,
 ):
     df = cml.get_data_index()
-    df = df[df["experiment"].isin(experiments)].copy()
+    df["session"] = df["session"].astype(int)
+
+    # Filter by experiments
+    if experiments:
+        df = df[df["experiment"].isin(experiments)].copy()
+    else:
+        df = df[df["experiment"].isin(_EXPERIMENT_MODULES.keys())].copy()
+
+    # Filter by subjects
+    if subjects:
+        df = df[df["subject"].isin(subjects)].copy()
+
+    # Exclude subjects
     if subjects_to_exclude:
         df = df[~df["subject"].isin(subjects_to_exclude)].copy()
 
+    # Apply max_subjects per experiment
     dfs = []
-    for exp in experiments:
+    for exp in df["experiment"].unique():
         df_this = df[df["experiment"] == exp]
-        subjects = (
+        exp_subjects = (
             df_this["subject"]
             .drop_duplicates()
             .sort_values()
             .head(max_subjects)
         )
-        dfs.append(df_this[df_this["subject"].isin(subjects)].copy())
+        dfs.append(df_this[df_this["subject"].isin(exp_subjects)].copy())
 
-    df_subset = pd.concat(dfs, ignore_index=True)
-    df_jobs = df_subset[["subject", "experiment", "session"]].copy()
+    if not dfs:
+        return pd.DataFrame(columns=["subject", "experiment", "session", "system_version", "unit_scale"])
+    df = pd.concat(dfs, ignore_index=True)
 
-    # Normalize dtypes
+    # Filter by sessions if specified
+    if sessions_spec is not None:
+        filtered_rows = []
+        for (subj, exp), group in df.groupby(["subject", "experiment"]):
+            available = sorted(group["session"].tolist())
+            requested = parse_sessions(sessions_spec, available)
+            for ses in requested:
+                if ses in available:
+                    filtered_rows.append(group[group["session"] == ses])
+                else:
+                    print(f"WARNING: session {ses} does not exist for {subj}/{exp}, skipping.")
+        if filtered_rows:
+            df = pd.concat(filtered_rows, ignore_index=True)
+        else:
+            return pd.DataFrame(columns=["subject", "experiment", "session", "system_version", "unit_scale"])
+
+    df_jobs = df[["subject", "experiment", "session"]].copy()
     df_jobs["session"] = df_jobs["session"].astype(int)
     conversion_df["session"] = conversion_df["session"].astype(int)
 
@@ -157,7 +212,7 @@ def build_jobs(
 # Top-level function for Dask mapping (avoid lambda/pickle weirdness)
 def run_job(
     subject, experiment, session, system_version, unit_scale,
-    monopolar, bipolar, mni, tal, area, brain_regions, root, override
+    monopolar, bipolar, brain_regions, root, override
 ):
     import sys, os
     p = os.path.expanduser("~/bids-convert")
@@ -165,8 +220,7 @@ def run_job(
         sys.path.insert(0, p)
     return convert_one_job(
         subject, experiment, int(session), float(system_version), float(unit_scale),
-        monopolar=monopolar, bipolar=bipolar, mni=mni,
-        tal=tal, area=area,
+        monopolar=monopolar, bipolar=bipolar,
         brain_regions=brain_regions,
         root=root,
         override=override,
@@ -253,41 +307,66 @@ def validate_bids_output(root: str):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Intracranial BIDS conversion (single / serial / parallel).")
-    ap.add_argument("--mode", choices=["single", "serial", "parallel"], required=False)
+    ap = argparse.ArgumentParser(
+        description="Intracranial BIDS conversion.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  # Convert one subject, one experiment, one session (serial)
+  %(prog)s --subjects R1001P --experiments FR1 --sessions 0 --serial
+
+  # Convert sessions 0-4 for two subjects
+  %(prog)s --subjects R1001P R1002P --experiments FR1 --sessions 0:5 --serial
+
+  # Convert all sessions for all FR1 subjects (parallel, default)
+  %(prog)s --experiments FR1
+
+  # Convert everything for one subject across all experiments
+  %(prog)s --subjects R1001P --serial
+
+  # Quick smokescreen test (1 subject per experiment)
+  %(prog)s --smokescreen --serial
+""",
+    )
 
     ap.add_argument("--conversion-csv", default=os.path.join(_SCRIPT_DIR, "system_1_unit_conversions.csv"))
     ap.add_argument("--root", default="/home1/maint/LTP_BIDS/")
 
-    # shared flags
-    ap.add_argument("--monopolar", action="store_true", default=True)
-    ap.add_argument("--no-monopolar", dest="monopolar", action="store_false")
-    ap.add_argument("--bipolar", action="store_true", default=True)
-    ap.add_argument("--no-bipolar", dest="bipolar", action="store_false")
-    ap.add_argument("--mni", action="store_true", default=True)
-    ap.add_argument("--no-mni", dest="mni", action="store_false")
-    ap.add_argument("--tal", action="store_true", default=False)
-    ap.add_argument("--area", action="store_true", default=False)
+    # Selection
+    ap.add_argument("--subjects", nargs="+", default=None,
+                    help="Subject IDs to convert. If omitted, all subjects are included.")
+    ap.add_argument("--experiments", nargs="+", default=None,
+                    choices=sorted(_EXPERIMENT_MODULES.keys()),
+                    help="Experiments to convert. If omitted, all experiments are included.")
+    ap.add_argument("--sessions", nargs="+", default=None,
+                    help="Session specifiers: int (e.g. 3) or slice (e.g. 0:5, :3, 2:). "
+                         "Requires --subjects or --experiments.")
+
+    # Opt-out flags
+    ap.add_argument("--no-monopolar", dest="monopolar", action="store_false", default=True,
+                    help="Skip monopolar export.")
+    ap.add_argument("--no-bipolar", dest="bipolar", action="store_false", default=True,
+                    help="Skip bipolar export.")
+
+    # Behavior flags
+    ap.add_argument("--serial", action="store_true", default=False,
+                    help="Run jobs sequentially instead of parallel (Dask).")
+    ap.add_argument("--override", action="store_true", default=False,
+                    help="Re-convert sessions even if they already exist in --root.")
     ap.add_argument("--validate", action="store_true", default=False,
                     help="Run BIDS validation on the output directory after conversion.")
     ap.add_argument("--validate-only", action="store_true", default=False,
                     help="Skip conversion and only run BIDS validation on --root.")
-    ap.add_argument("--override", action="store_true", default=False,
-                    help="Re-convert sessions even if they already exist in --root.")
 
-    # single mode args
-    ap.add_argument("--subject")
-    ap.add_argument("--experiment", choices=sorted(_EXPERIMENT_MODULES.keys()))
-    ap.add_argument("--session", type=int)
-
-    # serial/parallel job-building args
-    ap.add_argument("--experiments", nargs="*", default=list(_EXPERIMENT_MODULES.keys()))
-    ap.add_argument("--max-subjects", type=int, default=10)
-    ap.add_argument("--exclude-subjects", nargs="*", default=["LTP001"])
+    # Job filtering
+    ap.add_argument("--max-subjects", type=int, default=10,
+                    help="Max subjects per experiment (default: 10).")
+    ap.add_argument("--exclude-subjects", nargs="*", default=["LTP001"],
+                    help="Subjects to exclude.")
     ap.add_argument("--smokescreen", action="store_true", default=False,
                     help="Quick test: limit to 1 subject per experiment.")
 
-    # parallel args
+    # Parallel (Dask) args
     ap.add_argument("--job-name", default="bids_convert")
     ap.add_argument("--memory-per-job", default="50GB")
     ap.add_argument("--max-n-jobs", type=int, default=10)
@@ -298,6 +377,10 @@ def main():
 
     args = ap.parse_args()
 
+    # --- Validate argument combinations ---
+    if args.sessions is not None and args.subjects is None and args.experiments is None:
+        ap.error("--sessions requires at least --subjects or --experiments to be specified.")
+
     if args.validate_only:
         valid = validate_bids_output(args.root)
         sys.exit(0 if valid else 1)
@@ -307,76 +390,44 @@ def main():
 
     brain_regions = {br: 1 for br in intracranial_BIDS_converter.BRAIN_REGIONS}
 
-    # ---- SINGLE ----
-    if args.mode == "single":
-        if args.subject is None or args.experiment is None or args.session is None:
-            ap.error("--mode single requires --subject, --experiment, and --session")
-
-        params = lookup_conversion_params(conversion_df, args.subject, args.experiment, args.session)
-        if params is None:
-            print(f"SKIP: no conversion row for (subject={args.subject}, experiment={args.experiment}, session={args.session})")
-            sys.exit(2)
-
-        system_version, unit_scale = params
-
-        print(
-            f"Running SINGLE conversion:\n"
-            f"  subject={args.subject}\n"
-            f"  experiment={args.experiment}\n"
-            f"  session={args.session}\n"
-            f"  system_version={system_version}\n"
-            f"  unit_scale={unit_scale}\n"
-        )
-
-        ok = convert_one_job(
-            args.subject, args.experiment, args.session,
-            system_version, unit_scale,
-            monopolar=args.monopolar, bipolar=args.bipolar, mni=args.mni,
-            tal=args.tal, area=args.area,
-            brain_regions=brain_regions,
-            root=args.root,
-            override=args.override,
-        )
-        if args.validate:
-            valid = validate_bids_output(args.root)
-            sys.exit(0 if ok and valid else 1)
-        sys.exit(0 if ok else 1)
-
-    # Build jobs for serial/parallel
+    # --- Build jobs ---
     max_subjects = 1 if args.smokescreen else args.max_subjects
-    df_jobs2 = build_jobs(
+    df_jobs = build_jobs(
+        subjects=args.subjects,
         experiments=args.experiments,
+        sessions_spec=args.sessions,
         max_subjects=max_subjects,
-        subjects_to_exclude=set(args.exclude_subjects),
+        subjects_to_exclude=set(args.exclude_subjects or []),
         conversion_df=conversion_df,
     )
 
-    print("Jobs to run:", len(df_jobs2))
-    print(df_jobs2.head())
+    if df_jobs.empty:
+        print("No jobs to run.")
+        sys.exit(0)
+
+    print(f"Jobs to run: {len(df_jobs)}")
+    print(df_jobs.to_string(index=False))
 
     # ---- SERIAL ----
-    if args.mode == "serial":
+    if args.serial:
         n_ok = 0
         n_fail = 0
-        df_jobs2 = df_jobs2.reset_index(drop=True)
+        df_jobs = df_jobs.reset_index(drop=True)
 
-        for i, row in df_jobs2.iterrows():
+        for i, row in df_jobs.iterrows():
             subj = row["subject"]
             exp = row["experiment"]
             sess = int(row["session"])
             sv = float(row["system_version"])
             us = float(row["unit_scale"])
 
-            print(f"\n[{i+1}/{len(df_jobs2)}] {subj} {exp} ses-{sess} (sv={sv}, unit_scale={us})")
+            print(f"\n[{i+1}/{len(df_jobs)}] {subj} {exp} ses-{sess} (sv={sv}, unit_scale={us})")
 
             try:
                 _ = convert_one_job(
                     subj, exp, sess, sv, us,
                     monopolar=args.monopolar,
                     bipolar=args.bipolar,
-                    mni=args.mni,
-                    tal=args.tal,
-                    area=args.area,
                     brain_regions=brain_regions,
                     root=args.root,
                     override=args.override,
@@ -395,7 +446,7 @@ def main():
             sys.exit(0 if n_fail == 0 and valid else 1)
         sys.exit(0 if n_fail == 0 else 1)
 
-    # ---- PARALLEL ----
+    # ---- PARALLEL (default) ----
     import cmldask.CMLDask as da
     from dask.distributed import as_completed
 
@@ -408,24 +459,21 @@ def main():
         max_n_jobs=args.max_n_jobs,
         threads_per_job=args.threads_per_job,
         adapt=args.adapt,
-        log_directory=log_dir,  # expanded + ensured exists
+        log_directory=log_dir,
     )
 
     futures = client.map(
         run_job,
-        df_jobs2["subject"].tolist(),
-        df_jobs2["experiment"].tolist(),
-        df_jobs2["session"].tolist(),
-        df_jobs2["system_version"].tolist(),
-        df_jobs2["unit_scale"].tolist(),
-        [args.monopolar] * len(df_jobs2),
-        [args.bipolar] * len(df_jobs2),
-        [args.mni] * len(df_jobs2),
-        [args.tal] * len(df_jobs2),
-        [args.area] * len(df_jobs2),
-        [brain_regions] * len(df_jobs2),
-        [args.root] * len(df_jobs2),
-        [args.override] * len(df_jobs2),
+        df_jobs["subject"].tolist(),
+        df_jobs["experiment"].tolist(),
+        df_jobs["session"].tolist(),
+        df_jobs["system_version"].tolist(),
+        df_jobs["unit_scale"].tolist(),
+        [args.monopolar] * len(df_jobs),
+        [args.bipolar] * len(df_jobs),
+        [brain_regions] * len(df_jobs),
+        [args.root] * len(df_jobs),
+        [args.override] * len(df_jobs),
     )
 
     n_ok = 0
@@ -441,6 +489,9 @@ def main():
             print(e)
 
     print(f"Done. ok={n_ok} fail={n_fail}")
+    if args.validate:
+        valid = validate_bids_output(args.root)
+        sys.exit(0 if n_fail == 0 and valid else 1)
     sys.exit(0 if n_fail == 0 else 1)
 
 
