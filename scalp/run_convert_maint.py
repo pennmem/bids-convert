@@ -93,7 +93,7 @@ def parse_args():
     parser.add_argument(
         "--sequential",
         action="store_true",
-        default=True,
+        default=False,
         help="Run sequentially (no Dask / Slurm)",
     )
 
