@@ -8,6 +8,8 @@ import os
 from glob import glob
 import mne_bids
 
+from .edf_digital_writer import resolve_edf_units, write_digital
+
 
 class intracranial_BIDS_converter:
     ELEC_TYPES_DESCRIPTION = {'S': 'strip', 'G': 'grid', 'D': 'depth', 'uD': 'micro'}
@@ -359,83 +361,160 @@ class intracranial_BIDS_converter:
             sidecar['SEEGChannelCount'] = len(self.contacts[(self.contacts.type=='D') | (self.contacts.type=='uD')].index)
         return sidecar
     
-    def write_BIDS_ieeg(self, ref):
-        # Write EDF first to generate all BIDS sidecars
-        bids_path = self._BIDS_path().update(suffix='ieeg', extension='.edf', datatype='ieeg')
+    def _source_recording_path(self):
+        """Return the path to the original recording file, or None.
 
-        if ref == 'bipolar':
-            bids_path = bids_path.update(acquisition='bipolar')
-            mne_bids.write_raw_bids(self.eeg_bi, bids_path=bids_path, events=None, allow_preload=True, format='EDF', overwrite=True)
-            edf_path = bids_path.fpath  # capture before .update() mutates extension
-            mne_bids.update_sidecar_json(bids_path.update(extension='.json'), self.eeg_sidecar_bi)
-            raw = self.eeg_bi
-        elif ref == 'monopolar':
-            bids_path = bids_path.update(acquisition='monopolar')
-            mne_bids.write_raw_bids(self.eeg_mono, bids_path=bids_path, events=None, allow_preload=True, format='EDF', overwrite=True)
-            edf_path = bids_path.fpath  # capture before .update() mutates extension
-            mne_bids.update_sidecar_json(bids_path.update(extension='.json'), self.eeg_sidecar_mono)
-            raw = self.eeg_mono
-
-        # Remove auto-generated coordsystem/electrodes files from write_raw_bids.
-        # These lack the space entity and conflict with the ones we write explicitly
-        # via write_BIDS_electrodes / write_BIDS_coords.
-        ieeg_dir = edf_path.parent
-        for suffix in ("coordsystem.json", "electrodes.tsv"):
-            auto = ieeg_dir / f"sub-{self.subject}_ses-{self.session}_acq-{ref}_{suffix}"
-            if auto.exists():
-                auto.unlink()
-
-        # Replace EDF with BDF for 24-bit precision.
-        # BDF requires signal duration to be exactly divisible by the data
-        # record duration (n_samples_per_record / sfreq).  Crop to the last
-        # complete data record to avoid export failures.
-        bdf_path = edf_path.with_suffix('.bdf')
+        For system 1 sessions this is the source EDF under
+        ``current_source/raw_eeg/``; for other systems the file at the
+        same location may be NSx / HDF5 / etc. and the EDF priority
+        branch in ``resolve_edf_units`` will simply skip it (pyedflib
+        will fail to open it and return None).
+        """
+        index_path = os.path.join(
+            "/protocols/r1/subjects",
+            self.subject,
+            "experiments",
+            self.experiment,
+            "sessions",
+            str(self.session),
+            "ephys",
+            "current_source",
+            "index.json",
+        )
+        if not os.path.exists(index_path):
+            return None
         try:
-            raw.export(bdf_path, overwrite=True)
-        except Exception:
-            sfreq = raw.info['sfreq']
-            n_samples = len(raw.times)
-            # BDF default: 1 data record = round(sfreq) samples
-            samples_per_record = round(sfreq)
-            full_records = n_samples // samples_per_record
-            keep_samples = int(full_records * samples_per_record)
-            tmax = (keep_samples - 1) / sfreq
-            raw = raw.copy().crop(tmax=tmax)
-            raw.export(bdf_path, overwrite=True)
-        edf_path.unlink()
+            with open(index_path) as f:
+                index = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+        files = (index.get("raw_eeg") or {}).get("files") or []
+        if not files:
+            return None
+        candidate = os.path.join(os.path.dirname(index_path), files[0])
+        return candidate if os.path.exists(candidate) else None
 
-        # Update scans.tsv to reference .bdf instead of .edf
-        scans_tsv = mne_bids.BIDSPath(
-            subject=self.subject, session=str(self.session),
-            suffix='scans', extension='.tsv', root=self.root,
-        ).fpath
-        if scans_tsv.exists():
-            text = scans_tsv.read_text()
-            scans_tsv.write_text(text.replace('.edf', '.bdf'))
-        
-        # also write events
-        bids_path = self._BIDS_path().update(suffix='events', extension='.tsv', datatype='ieeg')
+    def write_BIDS_ieeg(self, ref):
+        """Write the iEEG file directly via pyedflib (no MNE round-trip).
+
+        Monopolar sessions always write EDF int16. Bipolar sessions
+        write EDF int16 when the per-pair int subtraction stays within
+        ±32767, and BDF int24 otherwise. The EEG file write goes
+        straight to disk in the recording's native LSB units; analyst-
+        side MNE recovers Volts via the standard EDF/BDF gain formula
+        plus the dimension multiplier.
+        """
+        if ref == "bipolar":
+            data_int, labels, sfreq, container = self.eeg_bi
+            sidecar_dict = self.eeg_sidecar_bi
+        elif ref == "monopolar":
+            data_int, labels, sfreq = self.eeg_mono
+            container = "EDF"
+            sidecar_dict = self.eeg_sidecar_mono
+        else:
+            raise ValueError(f"unknown ref {ref!r}")
+
+        ext = ".edf" if container == "EDF" else ".bdf"
+        bids_path = self._BIDS_path().update(
+            suffix="ieeg", extension=ext, datatype="ieeg", acquisition=ref,
+        )
+        out_path = bids_path.fpath
+        os.makedirs(out_path.parent, exist_ok=True)
+
+        # Resolve per-channel units via the priority cascade.
+        source_edf = self._source_recording_path() if ref == "monopolar" else None
+        signal_units, units_status = resolve_edf_units(
+            labels,
+            source_edf_path=source_edf,
+            conversion_to_V=float(self.unit_scale) if self.unit_scale else None,
+            container=container,
+            data_for_fallback=data_int,
+        )
+        if units_status == "derived":
+            print(
+                f"  WARN: derived units from data for {self.subject} "
+                f"{self.experiment} ses-{self.session} ({ref})"
+            )
+
+        write_digital(
+            str(out_path),
+            labels,
+            data_int,
+            sfreq,
+            signal_units,
+            container=container,
+        )
+
+        # Sidecar JSON.
+        with open(bids_path.update(extension=".json").fpath, "w") as f:
+            json.dump(sidecar_dict, f, indent=2)
+
+        # Append to scans.tsv (replacing any prior entry for this acquisition).
+        self._update_scans_tsv(out_path)
+
+        # Events sidecar (only on the first acquisition write — same as before).
+        bids_path = self._BIDS_path().update(
+            suffix="events", extension=".tsv", datatype="ieeg",
+        )
         self._to_tsv(self.events, bids_path.fpath)
-        with open(bids_path.update(extension='.json').fpath, 'w') as f:
+        with open(bids_path.update(extension=".json").fpath, "w") as f:
             json.dump(fp=f, obj=self.events_descriptor)
+
+    def _update_scans_tsv(self, ieeg_file_path):
+        """Append a row for the new iEEG file to ``scans.tsv``.
+
+        BIDS spec: ``scans.tsv`` lists every recording in the session
+        with a path relative to the session directory. We append rather
+        than overwrite so multiple acquisitions in the same session
+        coexist.
+        """
+        scans_tsv = mne_bids.BIDSPath(
+            subject=self.subject,
+            session=str(self.session),
+            suffix="scans",
+            extension=".tsv",
+            root=self.root,
+        ).fpath
+        # Path relative to the session directory.
+        rel_path = os.path.relpath(ieeg_file_path, scans_tsv.parent)
+        new_row = pd.DataFrame([{"filename": rel_path}])
+        if scans_tsv.exists():
+            existing = pd.read_csv(scans_tsv, sep="\t")
+            existing = existing[existing["filename"] != rel_path]
+            combined = pd.concat([existing, new_row], ignore_index=True)
+        else:
+            os.makedirs(scans_tsv.parent, exist_ok=True)
+            combined = new_row
+        combined.to_csv(scans_tsv, sep="\t", index=False)
 
     # ---------- EEG (monopolar) ----------
     def eeg_mono_to_BIDS(self):
+        """Load monopolar digital ints via cmlreaders. No MNE, no Volts.
+
+        Returns
+        -------
+        data_int16 : np.ndarray, shape (n_channels, n_samples)
+            Raw integer samples in the source recording's native LSB.
+        labels : list[str]
+            Per-channel labels in the same order as ``data_int16`` rows.
+        sfreq : float
+            Sampling frequency in Hz.
+        """
         eeg = self.reader.load_eeg(scheme=self.contacts)
-        # Two-step conversion to avoid int16 precision loss from a single large divisor:
-        #   Step 1: normalize raw units to 1 µV (e.g. divide by 10 for 0.1µV, by 4 for 250nV)
-        #   Step 2: convert µV to V for MNE's internal representation
-        # Two-step conversion to preserve precision:
-        #   Step 1: normalize raw units to 1 µV (small divisor: 10 for 0.1µV, 4 for 250nV)
-        #   Step 2: convert µV to V for MNE (MNE's EDF exporter converts V->µV when writing)
-        eeg.data = eeg.data / int(self.unit_scale)               # raw units ->V
-        # eeg.data = eeg.data / 1_000_000                                      # µV -> V
-
-        eeg_mne = eeg.to_mne()
-        mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_mono.type]))    # ecog or seeg
-        eeg_mne.set_channel_types(mapping)                                                     # set channel types
-
-        return eeg_mne
+        sfreq = float(eeg.samplerate)
+        # cmlreaders' EEGContainer.data is shape (n_events, n_channels, n_samples)
+        # for continuous loads → squeeze the singleton event dim.
+        arr = np.asarray(eeg.data)
+        if arr.ndim == 3:
+            arr = np.squeeze(arr, axis=0)
+        if arr.ndim != 2:
+            raise ValueError(
+                f"unexpected EEG shape from cmlreaders: {eeg.data.shape}"
+            )
+        # cmlreaders returns the raw LSB values as float64; cast back to int16.
+        data_int16 = arr.astype(np.int16)
+        labels = list(self.contacts.label)
+        return data_int16, labels, sfreq
 
     # ---------- EEG (bipolar) ----------
     @staticmethod
@@ -496,16 +575,58 @@ class intracranial_BIDS_converter:
             raw_mne.rename_channels(renames)
 
     def eeg_bi_to_BIDS(self):
+        """Load bipolar digital ints via cmlreaders. No MNE, no Volts.
+
+        cmlreaders' ``load_eeg(scheme=self.pairs)`` already does the
+        per-pair subtraction in the source-int domain, so the returned
+        ``eeg.data`` is the bipolar LSB values (just stored as float64).
+        Most pairs fit comfortably in int16, but a worst-case
+        opposing-rail pair *could* exceed ±32767. We detect that here
+        and report which container the writer should use.
+
+        Returns
+        -------
+        data_int : np.ndarray, shape (n_channels, n_samples)
+            Bipolar integer samples. ``int16`` if every value fits in
+            int16, else ``int32`` (writer will narrow to int24 BDF).
+        labels : list[str]
+            Per-pair labels (truncated to 16 chars to satisfy the
+            EDF/BDF spec — same truncation as
+            ``pairs_to_channels``).
+        sfreq : float
+            Sampling frequency in Hz.
+        container : str
+            ``"EDF"`` or ``"BDF"``. The caller writes the file with the
+            corresponding extension.
+        """
         eeg = self.reader.load_eeg(scheme=self.pairs)
-        eeg.data = eeg.data / int(self.unit_scale)               # raw units -> V
-        # eeg.data = eeg.data / 1_000_000                                      # µV -> V
+        sfreq = float(eeg.samplerate)
+        arr = np.asarray(eeg.data)
+        if arr.ndim == 3:
+            arr = np.squeeze(arr, axis=0)
+        if arr.ndim != 2:
+            raise ValueError(
+                f"unexpected bipolar EEG shape from cmlreaders: {eeg.data.shape}"
+            )
+        # Range check before narrowing.
+        obs_min = float(arr.min())
+        obs_max = float(arr.max())
+        if obs_min >= -32768 and obs_max <= 32767:
+            data_int = arr.astype(np.int16)
+            container = "EDF"
+        else:
+            data_int = arr.astype(np.int32)
+            container = "BDF"
+            print(
+                f"  bipolar overflow for {self.subject} {self.experiment} ses-{self.session}: "
+                f"[{obs_min:.0f}, {obs_max:.0f}] → promoting to BDF int24"
+            )
 
-        eeg_mne = eeg.to_mne()
-        self._truncate_channel_names(eeg_mne)
-        mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_bi.type]))
-        eeg_mne.set_channel_types(mapping)
-
-        return eeg_mne
+        labels = [
+            self._truncate_bipolar(n) if len(n) > 16 else n
+            for n in np.array(self.pairs.label)
+        ]
+        return data_int, labels, sfreq, container
     
     # ----------------------------------------
     # run conversion
