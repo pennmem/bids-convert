@@ -103,7 +103,11 @@ class ScalpBIDSConverter:
         self.session = session
         self.load_subject_info()
         self.set_wordpool()
-        self.events = self.load_events(beh_only=True)
+        try:
+            self.events = self.load_events(beh_only=True)
+        except FileNotFoundError as exc:
+            print(f"[SKIP] No events found for {subject}, {experiment}, session {session}: {exc}")
+            return
         self.make_event_descriptors()
         self.write_bids_beh(overwrite=overwrite_beh)
         try: 
