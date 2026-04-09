@@ -16,20 +16,27 @@ def bids_session_outputs_exist(root, subject, experiment, session):
     """
     Decide whether this (subject, session, experiment) appears already converted.
 
-    We check for the presence of a couple of expected BIDS output files.
-    Adjust patterns here if your converter writes different filenames.
+    The converter writes BIDS files using the lowercase experiment as the
+    task name (see ScalpBIDSConverter.write_bids_beh / write_bids_eeg)
+    and may put outputs under either ``beh/`` (behavioral-only sessions)
+    or ``eeg/`` (sessions with raw EEG). We treat the presence of any of
+    these as evidence the session has been converted.
     """
     sub = f"sub-{subject}"
     ses = f"ses-{session}"
-    eeg_dir = os.path.join(root, sub, ses, "eeg")
+    task = experiment.lower()
+    sess_dir = os.path.join(root, sub, ses)
 
-    # Common BIDS EEG outputs (one of these typically exists if conversion happened)
     candidates = [
-        os.path.join(eeg_dir, f"{sub}_{ses}_task-{experiment}_events.json"),
-        os.path.join(eeg_dir, f"{sub}_{ses}_task-{experiment}_events.tsv"),
-        os.path.join(eeg_dir, f"{sub}_{ses}_task-{experiment}_eeg.json"),
-        os.path.join(eeg_dir, f"{sub}_{ses}_task-{experiment}_eeg.tsv"),
-        os.path.join(eeg_dir, f"{sub}_{ses}_task-{experiment}_channels.tsv"),
+        # behavioral-only sessions
+        os.path.join(sess_dir, "beh", f"{sub}_{ses}_task-{task}_beh.json"),
+        os.path.join(sess_dir, "beh", f"{sub}_{ses}_task-{task}_beh.tsv"),
+        # full EEG sessions
+        os.path.join(sess_dir, "eeg", f"{sub}_{ses}_task-{task}_eeg.json"),
+        os.path.join(sess_dir, "eeg", f"{sub}_{ses}_task-{task}_eeg.tsv"),
+        os.path.join(sess_dir, "eeg", f"{sub}_{ses}_task-{task}_channels.tsv"),
+        os.path.join(sess_dir, "eeg", f"{sub}_{ses}_task-{task}_events.json"),
+        os.path.join(sess_dir, "eeg", f"{sub}_{ses}_task-{task}_events.tsv"),
     ]
     return any(os.path.exists(p) for p in candidates)
 
