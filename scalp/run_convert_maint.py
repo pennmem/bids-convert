@@ -20,9 +20,16 @@ def bids_session_outputs_exist(root, subject, experiment, session):
     task name (see ScalpBIDSConverter.write_bids_beh / write_bids_eeg)
     and may put outputs under either ``beh/`` (behavioral-only sessions)
     or ``eeg/`` (sessions with raw EEG). We treat the presence of any of
-    these as evidence the session has been converted.
+    these as evidence the session has been converted. The subject is
+    sanitized the same way ScalpBIDSConverter does (BIDS forbids ``_``
+    in entity values; we map ``_`` to ``v`` for "visit", e.g.
+    ``LTP220_03`` → ``LTP220v03``).
     """
-    sub = f"sub-{subject}"
+    sanitized_subject = "".join(
+        ch if ch.isalnum() else ("v" if ch == "_" else "")
+        for ch in str(subject)
+    )
+    sub = f"sub-{sanitized_subject}"
     ses = f"ses-{session}"
     task = experiment.lower()
     sess_dir = os.path.join(root, sub, ses)

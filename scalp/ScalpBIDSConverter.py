@@ -95,10 +95,36 @@ class ScalpBIDSConverter:
         ],
     }
     # eegoffset,correctPointingDirection, eegfile, eogArtifact, finalrecalled, montage, msoffset, mstime, phase, protocol, submittedPointingDirection, type
+    @staticmethod
+    def _sanitize_bids_label(label):
+        """Sanitize a label for use as a BIDS entity value.
+
+        BIDS only allows alphanumerics in subject/session/task labels;
+        underscores, dashes and slashes are reserved as field/file
+        separators. Some on-disk subject IDs (e.g. ``LTP220_03``)
+        contain underscores. We replace ``_`` with ``v`` ("visit") so
+        the boundary between the base subject ID and the retest
+        suffix is preserved (``LTP220_03`` → ``LTP220v03``), and drop
+        any other non-alphanumeric characters. The original ID is kept
+        as ``self.subject_raw`` for filesystem and CMLReader lookups.
+        """
+        out = []
+        for ch in str(label):
+            if ch.isalnum():
+                out.append(ch)
+            elif ch == "_":
+                out.append("v")
+        return "".join(out)
+
     def __init__(self, subject, experiment, session, root="/scratch/PEERS_BIDS/",
                  overwrite_eeg=True, overwrite_beh=True):
         self.root = root
-        self.subject = subject
+        # The on-disk / CMLReader subject label may contain characters
+        # BIDS forbids in entity values (e.g. 'LTP220_03'). Keep the
+        # original for data lookups, but expose a sanitized form to
+        # everything that builds a BIDSPath.
+        self.subject_raw = subject
+        self.subject = self._sanitize_bids_label(subject)
         self.experiment = experiment
         self.session = session
         self.load_subject_info()
@@ -130,9 +156,9 @@ class ScalpBIDSConverter:
     
     def locate_raw_file(self):
         # hacky way to find all matching files!
-        raw_file = glob(f"/data/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.raw*") + \
-                glob(f"/data/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.bdf*") + \
-                glob(f"/data/eeg/scalp/ltp/{self.experiment}/{self.subject}/session_{self.session}/eeg/*.mff*")
+        raw_file = glob(f"/data/eeg/scalp/ltp/{self.experiment}/{self.subject_raw}/session_{self.session}/eeg/*.raw*") + \
+                glob(f"/data/eeg/scalp/ltp/{self.experiment}/{self.subject_raw}/session_{self.session}/eeg/*.bdf*") + \
+                glob(f"/data/eeg/scalp/ltp/{self.experiment}/{self.subject_raw}/session_{self.session}/eeg/*.mff*")
         if len(raw_file)==0:
             raise FileNotFoundError
         elif len(raw_file)>1:
@@ -209,7 +235,7 @@ class ScalpBIDSConverter:
             
     def set_wordpool(self):
         if self.experiment=='ltpFR':
-            if self.subject <= 'LTP159':
+            if self.subject_raw <= 'LTP159':
                 self.wordpool_file = "wordpools/wasnorm_wordpool.txt"
             else:
                 self.wordpool_file = "wordpools/wasnorm_wordpool_less_exclusions.txt"
@@ -218,12 +244,12 @@ class ScalpBIDSConverter:
         elif np.isin(self.experiment, ["ValueCourier"]):
             self.wordpool_file = "wordpools/valuecourier_wordpool.txt"
         elif np.isin(self.experiment, ["VCBehOnly"]):
-            self.wordpool_file = f"/data/eeg/scalp/ltp/VCBehOnly/{self.subject}/wordpool.txt"
+            self.wordpool_file = f"/data/eeg/scalp/ltp/VCBehOnly/{self.subject_raw}/wordpool.txt"
         else:
             raise Exception("Wordpool not known for this experiment.")
     
     def load_events(self, beh_only=False):
-        reader = cml.CMLReader(self.subject, self.experiment, self.session)
+        reader = cml.CMLReader(self.subject_raw, self.experiment, self.session)
         events = reader.load('events')
         events = events.rename(columns={"eegoffset":"sample", "type":"trial_type"})
         ## math distractor
