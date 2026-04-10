@@ -91,19 +91,27 @@ class intracranial_BIDS_converter:
                 ) from exc
             raise
 
-    def _filter_contacts_to_recording(self, contacts):
-        """Filter a contacts scheme to only contacts the recording has.
+    def _filter_scheme_to_recording(self, scheme, scheme_name="contacts"):
+        """Filter a contacts/pairs scheme to only entries the recording has.
 
-        Discovers phantom contacts (in the wiring document but not in the
-        actual recording) by catching ``KeyError`` from cmlreaders'
-        ``load_eeg(scheme=...)``. Each ``KeyError(<int>)`` identifies one
-        missing contact; we drop it and retry until the load succeeds.
+        Discovers phantom contacts by catching ``KeyError`` from
+        ``load_eeg(scheme=...)``. Each ``KeyError(<int>)`` identifies a
+        missing contact number; we drop every row that references it (for
+        contacts that's the ``contact`` column; for pairs it's
+        ``contact_1`` or ``contact_2``) and retry until the load succeeds.
 
-        Returns ``(filtered_contacts, dropped_contacts_df)``.
+        Returns ``(filtered_scheme, dropped_scheme_df)``.
         """
         events = self.reader.load("events").iloc[[0]]
-        dropped_ids = []
-        filtered = contacts.copy()
+        dropped_ids = set()
+        filtered = scheme.copy()
+
+        # Which columns hold the contact numbers we need to filter on?
+        if "contact" in filtered.columns:
+            id_cols = ["contact"]
+        else:
+            id_cols = [c for c in ("contact_1", "contact_2") if c in filtered.columns]
+
         while True:
             try:
                 self.reader.load_eeg(
@@ -116,15 +124,25 @@ class intracranial_BIDS_converter:
                 except (TypeError, ValueError):
                     raise
                 n_before = len(filtered)
-                filtered = filtered[filtered["contact"] != missing]
-                dropped_ids.append(missing)
+                # Drop any row where ANY id column references the missing contact
+                mask = pd.Series(False, index=filtered.index)
+                for col in id_cols:
+                    mask |= (filtered[col] == missing)
+                filtered = filtered[~mask]
+                dropped_ids.add(missing)
                 if len(filtered) == n_before or filtered.empty:
                     raise
-        dropped = contacts[contacts["contact"].isin(dropped_ids)]
+
+        # Build the dropped df: rows from original scheme that were removed
+        mask = pd.Series(False, index=scheme.index)
+        for col in id_cols:
+            mask |= scheme[col].isin(dropped_ids)
+        dropped = scheme[mask]
+
         if len(dropped):
             print(
-                f"  Dropped {len(dropped)} phantom contacts not in recording: "
-                f"{sorted(dropped['contact'].tolist())}"
+                f"  Dropped {len(dropped)} phantom {scheme_name} "
+                f"(missing contact IDs: {sorted(dropped_ids)})"
             )
         return filtered, dropped
     
@@ -304,25 +322,44 @@ class intracranial_BIDS_converter:
     
     # convert CML pairs to BIDS channels (bipolar)
     def pairs_to_channels(self):
-        # MAY NEED EDGE CASES
         labels = np.array(self.pairs.label)
-        # Truncate names that exceed the 16-char EDF/BDF limit
         truncated = [self._truncate_bipolar(n) if len(n) > 16 else n for n in labels]
         channels = pd.DataFrame({'name': truncated})
-        # Some sessions return pairs without `type_1`/`type_2` columns
-        # (older cmlreaders schema). Fall back to `type` if present.
         type_col = 'type_1' if 'type_1' in self.pairs.columns else 'type'
-        channels['type'] = [self.ELEC_TYPES_BIDS.get(x) for x in self.pairs[type_col]]   # all pairs have same type
+        channels['type'] = [self.ELEC_TYPES_BIDS.get(x) for x in self.pairs[type_col]]
         channels['units'] = 'uV'
-        channels['low_cutoff'] = 'n/a'                 # highpass filter
-        channels['high_cutoff'] = 'n/a'                # lowpass filter (mne adds Nyquist frequency = 2 x sampling rate)
+        channels['low_cutoff'] = 'n/a'
+        channels['high_cutoff'] = 'n/a'
         channels['reference'] = 'bipolar'
         channels['group'] = [re.sub('\d+', '', x).split('-')[0] for x in self.pairs.label]
         channels['sampling_frequency'] = self.sfreq
-        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.pairs[type_col]] # all pairs have same type
+        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.pairs[type_col]]
         channels['notch'] = 'n/a'
-        channels = channels.fillna('n/a')              # remove NaN
-        channels = channels.replace('', 'n/a')         # resolve empty cell issue
+        channels['status'] = 'good'
+        channels['status_description'] = 'n/a'
+
+        # Append dropped pairs (phantom contacts) with status = bad
+        if hasattr(self, 'pairs_dropped') and len(self.pairs_dropped):
+            p = self.pairs_dropped
+            p_type_col = 'type_1' if 'type_1' in p.columns else 'type'
+            dropped_rows = pd.DataFrame({
+                'name': [self._truncate_bipolar(n) if len(n) > 16 else n for n in np.array(p.label)],
+                'type': [self.ELEC_TYPES_BIDS.get(x) for x in p[p_type_col]],
+                'units': 'uV',
+                'low_cutoff': 'n/a',
+                'high_cutoff': 'n/a',
+                'reference': 'bipolar',
+                'group': [re.sub('\d+', '', x).split('-')[0] for x in p.label],
+                'sampling_frequency': self.sfreq,
+                'description': [self.ELEC_TYPES_DESCRIPTION.get(x) for x in p[p_type_col]],
+                'notch': 'n/a',
+                'status': 'bad',
+                'status_description': 'not_in_recording',
+            })
+            channels = pd.concat([channels, dropped_rows], ignore_index=True)
+
+        channels = channels.fillna('n/a')
+        channels = channels.replace('', 'n/a')
         return channels
     
     # convert CML contacts to BIDS channels (monopolar)
@@ -761,7 +798,7 @@ class intracranial_BIDS_converter:
         # set for electrodes.tsv (physical positions); use the filtered
         # set for channels.tsv and EEG labels.
         self.contacts_all = self.contacts.copy()
-        self.contacts, self.contacts_dropped = self._filter_contacts_to_recording(self.contacts)
+        self.contacts, self.contacts_dropped = self._filter_scheme_to_recording(self.contacts, "contacts")
 
         # Check which coordinate systems are actually available
         has_mni = self.mni and 'mni.x' in self.contacts_all.columns
@@ -791,6 +828,8 @@ class intracranial_BIDS_converter:
         # ---------- Channels ----------
         self.pairs = self.load_pairs()
         if self.bipolar:
+            self.pairs_all = self.pairs.copy()
+            self.pairs, self.pairs_dropped = self._filter_scheme_to_recording(self.pairs, "pairs")
             self.channels_bi = self.pairs_to_channels()
         if self.monopolar:
             self.channels_mono = self.contacts_to_channels()
