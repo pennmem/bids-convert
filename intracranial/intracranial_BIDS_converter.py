@@ -658,6 +658,21 @@ class intracranial_BIDS_converter:
             raise ValueError(
                 f"unexpected EEG shape from cmlreaders: {eeg.data.shape}"
             )
+
+        # Reconcile if cmlreaders silently dropped contacts at load time.
+        n_loaded = arr.shape[0]
+        if n_loaded != len(self.contacts):
+            kept = set(str(ch) for ch in eeg.channels) if hasattr(eeg, 'channels') else None
+            if kept is not None and len(kept) == n_loaded:
+                mask = self.contacts['label'].isin(kept)
+                self.contacts = self.contacts[mask].reset_index(drop=True)
+            else:
+                self.contacts = self.contacts.iloc[:n_loaded].reset_index(drop=True)
+            print(
+                f"  eeg_mono_to_BIDS: reconciled self.contacts to {n_loaded} "
+                f"channels (was {n_loaded + (len(mask) - mask.sum()) if kept else '?'})"
+            )
+
         # cmlreaders returns the raw LSB values as float64; cast back to int16.
         data_int16 = arr.astype(np.int16)
         labels = list(self.contacts.label)
@@ -755,6 +770,32 @@ class intracranial_BIDS_converter:
             raise ValueError(
                 f"unexpected bipolar EEG shape from cmlreaders: {eeg.data.shape}"
             )
+
+        # cmlreaders may silently drop pairs whose contacts aren't in
+        # the recording (beyond what _filter_scheme_to_recording caught
+        # via its 50ms probe). Reconcile self.pairs to match the actual
+        # loaded channel count so labels stay aligned with data rows.
+        n_loaded = arr.shape[0]
+        if n_loaded != len(self.pairs):
+            # eeg.channels carries the labels cmlreaders actually kept.
+            kept = set(str(ch) for ch in eeg.channels) if hasattr(eeg, 'channels') else None
+            if kept is not None and len(kept) == n_loaded:
+                mask = self.pairs['label'].isin(kept)
+                dropped = self.pairs[~mask]
+                self.pairs = self.pairs[mask].reset_index(drop=True)
+                if len(dropped):
+                    print(
+                        f"  eeg_bi_to_BIDS: cmlreaders silently dropped {len(dropped)} "
+                        f"pairs at load time; reconciled self.pairs"
+                    )
+            else:
+                # Fallback: trim to first n_loaded rows (order-preserving)
+                print(
+                    f"  eeg_bi_to_BIDS: loaded {n_loaded} channels but "
+                    f"self.pairs has {len(self.pairs)}; trimming to match"
+                )
+                self.pairs = self.pairs.iloc[:n_loaded].reset_index(drop=True)
+
         # Range check before narrowing.
         obs_min = float(arr.min())
         obs_max = float(arr.max())
