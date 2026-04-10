@@ -63,10 +63,50 @@ def lookup_conversion_params(conversion_df: pd.DataFrame, subject: str, experime
     return float(r0["system_version"]), float(r0["conversion_to_V"])
 
 
-def session_exists(root: str, subject: str, session: int) -> bool:
-    """Check whether a session directory already exists in the BIDS root."""
-    session_dir = os.path.join(root, f"sub-{subject}", f"ses-{session}")
-    return os.path.isdir(session_dir)
+def session_fully_converted(
+    root: str, subject: str, experiment: str, session: int,
+    *, monopolar: bool, bipolar: bool,
+) -> bool:
+    """Return True only if ALL expected BIDS output files exist.
+
+    Checks for behavioral, electrodes, and (if requested) monopolar and
+    bipolar EEG files. If any expected file is missing the session should
+    be re-converted.
+    """
+    sub = f"sub-{subject}"
+    ses = f"ses-{session}"
+    prefix = f"{sub}_{ses}_task-{experiment}"
+    sess_dir = os.path.join(root, sub, ses)
+
+    expected = [
+        # behavioral
+        os.path.join(sess_dir, "beh", f"{prefix}_beh.tsv"),
+        os.path.join(sess_dir, "beh", f"{prefix}_beh.json"),
+        # events + electrodes
+        os.path.join(sess_dir, "ieeg", f"{prefix}_events.tsv"),
+        os.path.join(sess_dir, "ieeg", f"{prefix}_events.json"),
+    ]
+    if monopolar:
+        expected += [
+            os.path.join(sess_dir, "ieeg", f"{prefix}_acq-monopolar_ieeg.edf"),
+            os.path.join(sess_dir, "ieeg", f"{prefix}_acq-monopolar_ieeg.json"),
+            os.path.join(sess_dir, "ieeg", f"{prefix}_acq-monopolar_channels.tsv"),
+        ]
+    if bipolar:
+        expected += [
+            os.path.join(sess_dir, "ieeg", f"{prefix}_acq-bipolar_ieeg.edf"),
+            os.path.join(sess_dir, "ieeg", f"{prefix}_acq-bipolar_ieeg.json"),
+            os.path.join(sess_dir, "ieeg", f"{prefix}_acq-bipolar_channels.tsv"),
+        ]
+    # Also accept BDF for bipolar (int24 overflow sessions)
+    for i, p in enumerate(expected):
+        if p.endswith("_ieeg.edf") and not os.path.exists(p):
+            bdf_alt = p.replace("_ieeg.edf", "_ieeg.bdf")
+            if os.path.exists(bdf_alt):
+                expected[i] = bdf_alt
+
+    missing = [p for p in expected if not os.path.exists(p)]
+    return len(missing) == 0
 
 
 def parse_sessions(spec_list: list[str], available_sessions: list[int]) -> list[int]:
@@ -105,8 +145,11 @@ def convert_one_job(
     root: str,
     override: bool = False,
 ):
-    if not override and session_exists(root, subject, session):
-        print(f"SKIP: session already exists at {root}/sub-{subject}/ses-{session}/ (use --override to reconvert)")
+    if not override and session_fully_converted(
+        root, subject, experiment, session,
+        monopolar=monopolar, bipolar=bipolar,
+    ):
+        print(f"SKIP: all expected outputs exist at {root}/sub-{subject}/ses-{session}/ (use --override to reconvert)")
         return True
 
     Converter = _get_converter(experiment)

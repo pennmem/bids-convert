@@ -51,8 +51,17 @@ class FR1_BIDS_converter(intracranial_BIDS_converter):
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV') | 
                    (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0            # use rectime
         events['stim_file'] = np.where((events.trial_type=='WORD') & (events.list!=-1), self.wordpool_file, 'n/a')    # add wordpool to word events
-        events.loc[events.answer==-999, 'answer'] = 'n/a'                                                # non-math events no answer
-        events['item_name'] = events.item_name.replace('X', 'n/a')                              
+        # Some sessions (e.g. R1357M FR1 ses-0) have no math distractor at
+        # all and so CMLReader returns events with no `answer` / `test`
+        # columns. Add them as 'n/a' so the rest of the pipeline (and
+        # the column re-ordering at the bottom) keeps working.
+        if 'answer' not in events.columns:
+            events['answer'] = 'n/a'
+        else:
+            events.loc[events.answer==-999, 'answer'] = 'n/a'                                            # non-math events no answer
+        if 'test' not in events.columns:
+            events['test'] = 'n/a'
+        events['item_name'] = events.item_name.replace('X', 'n/a')
         events = events.drop(columns=['is_stim', 'stim_list', 'stim_params', 'mstime', 'protocol', 'item_num', 
                                       'iscorrect', 'eegfile', 'exp_version', 'montage', 'msoffset'])     # drop unneeded fields
         events = events.drop(columns=['intrusion', 'recalled'])                                          # dropping because confusing

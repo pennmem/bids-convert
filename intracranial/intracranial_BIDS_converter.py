@@ -79,9 +79,54 @@ class intracranial_BIDS_converter:
         with open(bids_path.update(extension='.json').fpath, 'w') as f:
             json.dump(fp=f, obj=self.events_descriptor)
 
-    # ---------- Electrodes ---------- 
+    # ---------- Electrodes ----------
     def load_contacts(self):
-        return self.reader.load('contacts')
+        try:
+            return self.reader.load('contacts')
+        except KeyError as exc:
+            if "contact" in str(exc) and "label" in str(exc):
+                raise RuntimeError(
+                    f"contacts file for {self.subject}/{self.experiment}/ses-{self.session} "
+                    f"is missing required columns (contact, label); skipping session"
+                ) from exc
+            raise
+
+    def _filter_contacts_to_recording(self, contacts):
+        """Filter a contacts scheme to only contacts the recording has.
+
+        Discovers phantom contacts (in the wiring document but not in the
+        actual recording) by catching ``KeyError`` from cmlreaders'
+        ``load_eeg(scheme=...)``. Each ``KeyError(<int>)`` identifies one
+        missing contact; we drop it and retry until the load succeeds.
+
+        Returns ``(filtered_contacts, dropped_contacts_df)``.
+        """
+        events = self.reader.load("events").iloc[[0]]
+        dropped_ids = []
+        filtered = contacts.copy()
+        while True:
+            try:
+                self.reader.load_eeg(
+                    events=events, rel_start=0, rel_stop=50, scheme=filtered,
+                )
+                break
+            except KeyError as exc:
+                try:
+                    missing = int(exc.args[0])
+                except (TypeError, ValueError):
+                    raise
+                n_before = len(filtered)
+                filtered = filtered[filtered["contact"] != missing]
+                dropped_ids.append(missing)
+                if len(filtered) == n_before or filtered.empty:
+                    raise
+        dropped = contacts[contacts["contact"].isin(dropped_ids)]
+        if len(dropped):
+            print(
+                f"  Dropped {len(dropped)} phantom contacts not in recording: "
+                f"{sorted(dropped['contact'].tolist())}"
+            )
+        return filtered, dropped
     
     def generate_area_map(self):
         area_path = f'/data10/RAM/subjects/{self.subject}/docs/area.txt'
@@ -124,45 +169,45 @@ class intracranial_BIDS_converter:
     
     # convert CML contacts to BIDS electrodes
     def contacts_to_electrodes(self, atlas, toggle):
-        # MAY NEED EDGE CASES
-        electrodes = pd.DataFrame({'name': np.array(self.contacts.label)})      # name = label of contact
-        electrodes['x'] = self.contacts[f'{atlas}.x']
-        electrodes['y'] = self.contacts[f'{atlas}.y']
-        electrodes['z'] = self.contacts[f'{atlas}.z']
+        # Use the full contacts set (including phantom contacts) for
+        # electrodes — these are physical positions, not data channels.
+        contacts = getattr(self, 'contacts_all', self.contacts)
+        electrodes = pd.DataFrame({'name': np.array(contacts.label)})      # name = label of contact
+        electrodes['x'] = contacts[f'{atlas}.x']
+        electrodes['y'] = contacts[f'{atlas}.y']
+        electrodes['z'] = contacts[f'{atlas}.z']
         
         # electrode groups (shanks)
         groups = []
-        for _, row in self.contacts.iterrows():
+        for _, row in contacts.iterrows():
             split_label = list(row.label)
-            #dig_idx = [i for i, c in enumerate(split_label) if c.isdigit()]     # indicies of digits in label
-            alpha_idx = [i for i, c in enumerate(split_label) if c.isalpha()]   # indices of alphabetical characters in label
-            groups.append(row.label[:alpha_idx[-1]+1])                          # select values before final digits
+            alpha_idx = [i for i, c in enumerate(split_label) if c.isalpha()]
+            groups.append(row.label[:alpha_idx[-1]+1])
         electrodes['group'] = groups
-        #electrodes['group'] = [re.sub('\d+', '', x) for x in self.contacts.label]
-        
-        if self.area:       # use area data if available
+
+        if self.area:
             electrodes['size'] = [self.area_map.get(x) if x in self.area_map.keys() else -999 for x in electrodes.group]
         else:
             electrodes['size'] = -999
-        
-        electrodes['hemisphere'] = ['L' if x < 0 else 'R' if x > 0 else 'n/a' for x in electrodes.x]        # use coordinates for hemisphere
-        electrodes['type'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.contacts.type]
-        
+
+        electrodes['hemisphere'] = ['L' if x < 0 else 'R' if x > 0 else 'n/a' for x in electrodes.x]
+        electrodes['type'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in contacts.type]
+
         # anatomical regions
         br_cols = []
         for br in self.BRAIN_REGIONS:
             if self.brain_regions[br] > 0:
-                if br not in self.contacts.columns:
+                if br not in contacts.columns:
                     print(f"WARNING: brain region column '{br}' not found in contacts for {self.subject} — omitting from electrodes TSV.")
                     continue
-                electrodes[br] = self.contacts[br]
+                electrodes[br] = contacts[br].values
                 br_cols.append(br)
-        
+
         # both MNI and Talairach --> default to MNI first, manually define Tal
         if toggle:
-            electrodes['tal.x'] = self.contacts['tal.x']
-            electrodes['tal.y'] = self.contacts['tal.y']
-            electrodes['tal.z'] = self.contacts['tal.z']
+            electrodes['tal.x'] = contacts['tal.x'].values
+            electrodes['tal.y'] = contacts['tal.y'].values
+            electrodes['tal.z'] = contacts['tal.z'].values
         
         electrodes = electrodes.fillna('n/a')                                   # remove NaN
         electrodes = electrodes.replace('', 'n/a')                              # resolve empty cell issue
@@ -264,14 +309,17 @@ class intracranial_BIDS_converter:
         # Truncate names that exceed the 16-char EDF/BDF limit
         truncated = [self._truncate_bipolar(n) if len(n) > 16 else n for n in labels]
         channels = pd.DataFrame({'name': truncated})
-        channels['type'] = [self.ELEC_TYPES_BIDS.get(x) for x in self.pairs.type_1]      # all pairs have same type
+        # Some sessions return pairs without `type_1`/`type_2` columns
+        # (older cmlreaders schema). Fall back to `type` if present.
+        type_col = 'type_1' if 'type_1' in self.pairs.columns else 'type'
+        channels['type'] = [self.ELEC_TYPES_BIDS.get(x) for x in self.pairs[type_col]]   # all pairs have same type
         channels['units'] = 'uV'
         channels['low_cutoff'] = 'n/a'                 # highpass filter
         channels['high_cutoff'] = 'n/a'                # lowpass filter (mne adds Nyquist frequency = 2 x sampling rate)
         channels['reference'] = 'bipolar'
         channels['group'] = [re.sub('\d+', '', x).split('-')[0] for x in self.pairs.label]
         channels['sampling_frequency'] = self.sfreq
-        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.pairs.type_1]    # all pairs have same type
+        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.pairs[type_col]] # all pairs have same type
         channels['notch'] = 'n/a'
         channels = channels.fillna('n/a')              # remove NaN
         channels = channels.replace('', 'n/a')         # resolve empty cell issue
@@ -279,7 +327,7 @@ class intracranial_BIDS_converter:
     
     # convert CML contacts to BIDS channels (monopolar)
     def contacts_to_channels(self):
-        # MAY NEED EDGE CASES
+        # Recorded contacts → status = good
         channels = pd.DataFrame({'name': np.array(self.contacts.label)})
         channels['type'] = [self.ELEC_TYPES_BIDS.get(x) for x in self.contacts.type]
         channels['units'] = 'uV'
@@ -289,12 +337,43 @@ class intracranial_BIDS_converter:
         channels['sampling_frequency'] = self.sfreq
         channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.contacts.type]
         channels['notch'] = 'n/a'
-        channels = channels.fillna('n/a')              # remove NaN
-        channels = channels.replace('', 'n/a')         # resolve empty cell issue
+        channels['status'] = 'good'
+        channels['status_description'] = 'n/a'
+
+        # Append phantom contacts (in wiring doc but not in recording) as
+        # status = bad so every contact is documented in channels.tsv.
+        if hasattr(self, 'contacts_dropped') and len(self.contacts_dropped):
+            dropped_rows = pd.DataFrame({
+                'name': np.array(self.contacts_dropped.label),
+                'type': [self.ELEC_TYPES_BIDS.get(x) for x in self.contacts_dropped.type],
+                'units': 'uV',
+                'low_cutoff': 'n/a',
+                'high_cutoff': 'n/a',
+                'group': [re.sub('\d+', '', x) for x in self.contacts_dropped.label],
+                'sampling_frequency': self.sfreq,
+                'description': [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.contacts_dropped.type],
+                'notch': 'n/a',
+                'status': 'bad',
+                'status_description': 'not_in_recording',
+            })
+            channels = pd.concat([channels, dropped_rows], ignore_index=True)
+
+        channels = channels.fillna('n/a')
+        channels = channels.replace('', 'n/a')
         return channels
     
     def write_BIDS_channelmap(self, ref):
-        """Write a mapping of original to truncated channel names if any were shortened."""
+        """Write a mapping of original to truncated channel names if any were shortened.
+
+        Older versions of mne-bids accepted ``suffix='channelmap'``;
+        newer ones (≥0.13) restrict suffixes to a fixed list and raise
+        ``ValueError``. Probe the installed version's allowed list and
+        fall back to ``suffix='channels'`` (which is always allowed)
+        when ``channelmap`` isn't permitted. The output filename ends
+        in ``..._channelmap.tsv`` either way so downstream tooling
+        keeps working, and we add a ``.bidsignore`` entry so the BIDS
+        validator skips it.
+        """
         original_labels = np.array(self.pairs.label)
         truncated_labels = [self._truncate_bipolar(n) if len(n) > 16 else n for n in original_labels]
 
@@ -303,11 +382,27 @@ class intracranial_BIDS_converter:
             return
 
         mapping_df = pd.DataFrame(renamed, columns=['original_name', 'truncated_name'])
+
+        # Pick a suffix this mne-bids version will accept.
+        try:
+            from mne_bids.path import ALLOWED_FILENAME_SUFFIX
+            suffix = 'channelmap' if 'channelmap' in ALLOWED_FILENAME_SUFFIX else 'channels'
+        except ImportError:
+            suffix = 'channelmap'
+
         bids_path = self._BIDS_path().update(
-            suffix='channelmap', extension='.tsv', datatype='ieeg',
+            suffix=suffix, extension='.tsv', datatype='ieeg',
             acquisition=ref,
         )
-        self._to_tsv(mapping_df, bids_path.fpath)
+        # If we had to fall back to 'channels', rewrite the basename so
+        # the file is still distinguishable from the real channels.tsv.
+        out_path = bids_path.fpath
+        if suffix != 'channelmap':
+            out_dir = os.path.dirname(out_path)
+            out_name = os.path.basename(out_path).replace('_channels.tsv', '_channelmap.tsv')
+            out_path = os.path.join(out_dir, out_name)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        self._to_tsv(mapping_df, out_path)
 
         # Ensure .bidsignore includes channelmap files
         bidsignore = os.path.join(self.root, '.bidsignore')
@@ -332,7 +427,19 @@ class intracranial_BIDS_converter:
     # ---------- EEG ----------
     # set sfreq and recording_duration attributes
     def eeg_metadata(self):
-        eeg = self.reader.load_eeg()
+        try:
+            eeg = self.reader.load_eeg()
+        except Exception as exc:
+            # `load_eeg()` with no events asks for the whole file at once,
+            # which fails on sessions with index/file length mismatches
+            # (MissingDataError) or split-EEG bookkeeping issues
+            # ("split EEG filenames don't seem to match"). Probe a small
+            # window around the first event instead.
+            from cmlreaders.exc import MissingDataError
+            if not (isinstance(exc, MissingDataError) or "split EEG filenames" in str(exc)):
+                raise
+            events = self.reader.load("events")
+            eeg = self.reader.load_eeg(events=events.iloc[[0]], rel_start=0, rel_stop=50)
         sfreq = eeg.samplerate
         recording_duration = eeg.data.shape[-1] / sfreq
         return sfreq, recording_duration
@@ -500,6 +607,9 @@ class intracranial_BIDS_converter:
         sfreq : float
             Sampling frequency in Hz.
         """
+        # Pass scheme=self.contacts so the loaded EEG is aligned to the
+        # filtered contacts (phantom contacts have already been removed
+        # in run() via _filter_contacts_to_recording).
         eeg = self.reader.load_eeg(scheme=self.contacts)
         sfreq = float(eeg.samplerate)
         # cmlreaders' EEGContainer.data is shape (n_events, n_channels, n_samples)
@@ -647,10 +757,15 @@ class intracranial_BIDS_converter:
 
         # ---------- Electrodes ----------
         self.contacts = self.load_contacts()
+        # Filter contacts to only those in the recording. Keep the full
+        # set for electrodes.tsv (physical positions); use the filtered
+        # set for channels.tsv and EEG labels.
+        self.contacts_all = self.contacts.copy()
+        self.contacts, self.contacts_dropped = self._filter_contacts_to_recording(self.contacts)
 
         # Check which coordinate systems are actually available
-        has_mni = self.mni and 'mni.x' in self.contacts.columns
-        has_tal = self.tal and 'tal.x' in self.contacts.columns
+        has_mni = self.mni and 'mni.x' in self.contacts_all.columns
+        has_tal = self.tal and 'tal.x' in self.contacts_all.columns
         if self.mni and not has_mni:
             print(f"WARNING: MNI coordinates missing for {self.subject} — skipping MNI output")
         if self.tal and not has_tal:
