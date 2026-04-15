@@ -63,50 +63,7 @@ def lookup_conversion_params(conversion_df: pd.DataFrame, subject: str, experime
     return float(r0["system_version"]), float(r0["conversion_to_V"])
 
 
-def session_fully_converted(
-    root: str, subject: str, experiment: str, session: int,
-    *, monopolar: bool, bipolar: bool,
-) -> bool:
-    """Return True only if ALL expected BIDS output files exist.
-
-    Checks for behavioral, electrodes, and (if requested) monopolar and
-    bipolar EEG files. If any expected file is missing the session should
-    be re-converted.
-    """
-    sub = f"sub-{subject}"
-    ses = f"ses-{session}"
-    prefix = f"{sub}_{ses}_task-{experiment}"
-    sess_dir = os.path.join(root, sub, ses)
-
-    expected = [
-        # behavioral
-        os.path.join(sess_dir, "beh", f"{prefix}_beh.tsv"),
-        os.path.join(sess_dir, "beh", f"{prefix}_beh.json"),
-        # events + electrodes
-        os.path.join(sess_dir, "ieeg", f"{prefix}_events.tsv"),
-        os.path.join(sess_dir, "ieeg", f"{prefix}_events.json"),
-    ]
-    if monopolar:
-        expected += [
-            os.path.join(sess_dir, "ieeg", f"{prefix}_acq-monopolar_ieeg.edf"),
-            os.path.join(sess_dir, "ieeg", f"{prefix}_acq-monopolar_ieeg.json"),
-            os.path.join(sess_dir, "ieeg", f"{prefix}_acq-monopolar_channels.tsv"),
-        ]
-    if bipolar:
-        expected += [
-            os.path.join(sess_dir, "ieeg", f"{prefix}_acq-bipolar_ieeg.edf"),
-            os.path.join(sess_dir, "ieeg", f"{prefix}_acq-bipolar_ieeg.json"),
-            os.path.join(sess_dir, "ieeg", f"{prefix}_acq-bipolar_channels.tsv"),
-        ]
-    # Also accept BDF for bipolar (int24 overflow sessions)
-    for i, p in enumerate(expected):
-        if p.endswith("_ieeg.edf") and not os.path.exists(p):
-            bdf_alt = p.replace("_ieeg.edf", "_ieeg.bdf")
-            if os.path.exists(bdf_alt):
-                expected[i] = bdf_alt
-
-    missing = [p for p in expected if not os.path.exists(p)]
-    return len(missing) == 0
+STAGES = ('behavioral', 'electrodes', 'mono-eeg', 'bi-eeg', 'mono-channels', 'bi-channels')
 
 
 def parse_sessions(spec_list: list[str], available_sessions: list[int]) -> list[int]:
@@ -139,29 +96,18 @@ def convert_one_job(
     system_version: float,
     unit_scale: float,
     *,
-    monopolar: bool,
-    bipolar: bool,
     brain_regions: dict,
     root: str,
-    override: bool = False,
+    overrides: dict | None = None,
 ):
-    if not override and session_fully_converted(
-        root, subject, experiment, session,
-        monopolar=monopolar, bipolar=bipolar,
-    ):
-        print(f"SKIP: all expected outputs exist at {root}/sub-{subject}/ses-{session}/ (use --override to reconvert)")
-        return True
-
     Converter = _get_converter(experiment)
 
     converter = Converter(
         subject, experiment, session,
         system_version, unit_scale,
-        monopolar, bipolar,
-        True,   # mni
-        False,  # tal
-        False,  # area
+        False,           # area
         brain_regions,
+        overrides=overrides or {},
         root=root,
     )
     return converter.run()
@@ -255,7 +201,7 @@ def build_jobs(
 # Top-level function for Dask mapping (avoid lambda/pickle weirdness)
 def run_job(
     subject, experiment, session, system_version, unit_scale,
-    monopolar, bipolar, brain_regions, root, override
+    brain_regions, root, overrides,
 ):
     import sys, os
     p = os.path.expanduser("~/bids-convert")
@@ -263,10 +209,9 @@ def run_job(
         sys.path.insert(0, p)
     return convert_one_job(
         subject, experiment, int(session), float(system_version), float(unit_scale),
-        monopolar=monopolar, bipolar=bipolar,
         brain_regions=brain_regions,
         root=root,
-        override=override,
+        overrides=overrides,
     )
 
 
@@ -385,17 +330,17 @@ examples:
                     help="Session specifiers: int (e.g. 3) or slice (e.g. 0:5, :3, 2:). "
                          "Requires --subjects or --experiments.")
 
-    # Opt-out flags
-    ap.add_argument("--no-monopolar", dest="monopolar", action="store_false", default=True,
-                    help="Skip monopolar export.")
-    ap.add_argument("--no-bipolar", dest="bipolar", action="store_false", default=True,
-                    help="Skip bipolar export.")
+    # Per-stage override flags. Default: each stage runs only when its
+    # outputs are missing on disk. Pass --override-<stage> to force a
+    # re-run regardless of existing files. Mono vs bipolar acquisitions
+    # are auto-detected from system_version inside the converter.
+    for stage in STAGES:
+        ap.add_argument(f"--override-{stage}", action="store_true", default=False,
+                        help=f"Force re-conversion of the '{stage}' stage even if outputs exist.")
 
     # Behavior flags
     ap.add_argument("--serial", action="store_true", default=False,
                     help="Run jobs sequentially instead of parallel (Dask).")
-    ap.add_argument("--override", action="store_true", default=False,
-                    help="Re-convert sessions even if they already exist in --root.")
     ap.add_argument("--validate", action="store_true", default=False,
                     help="Run BIDS validation on the output directory after conversion.")
     ap.add_argument("--validate-only", action="store_true", default=False,
@@ -433,6 +378,10 @@ examples:
 
     brain_regions = {br: 1 for br in intracranial_BIDS_converter.BRAIN_REGIONS}
 
+    # Build the per-stage overrides dict from the parsed args
+    # (argparse converts hyphens to underscores in the attribute name).
+    overrides = {stage: getattr(args, f"override_{stage.replace('-', '_')}") for stage in STAGES}
+
     # --- Build jobs ---
     max_subjects = 1 if args.smokescreen else args.max_subjects
     df_jobs = build_jobs(
@@ -469,11 +418,9 @@ examples:
             try:
                 _ = convert_one_job(
                     subj, exp, sess, sv, us,
-                    monopolar=args.monopolar,
-                    bipolar=args.bipolar,
                     brain_regions=brain_regions,
                     root=args.root,
-                    override=args.override,
+                    overrides=overrides,
                 )
                 n_ok += 1
                 print("✓ finished")
@@ -512,11 +459,9 @@ examples:
         df_jobs["session"].tolist(),
         df_jobs["system_version"].tolist(),
         df_jobs["unit_scale"].tolist(),
-        [args.monopolar] * len(df_jobs),
-        [args.bipolar] * len(df_jobs),
         [brain_regions] * len(df_jobs),
         [args.root] * len(df_jobs),
-        [args.override] * len(df_jobs),
+        [overrides] * len(df_jobs),
     )
 
     n_ok = 0

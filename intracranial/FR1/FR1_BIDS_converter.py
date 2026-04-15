@@ -16,8 +16,8 @@ class FR1_BIDS_converter(intracranial_BIDS_converter):
     wordpool_long_SP = np.loadtxt('FR1/wordpools/wordpool_long_SP.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/FR1/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+    def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/FR1/'):
+        super().__init__(subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides, root)
 
     # ---------- Events ----------
     def set_wordpool(self):

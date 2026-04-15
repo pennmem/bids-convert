@@ -13,8 +13,8 @@ class YC2_BIDS_converter(intracranial_BIDS_converter):
     wordpool = np.loadtxt('YC2/wordpools/wordpool.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/YC2/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+    def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/YC2/'):
+        super().__init__(subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides, root)
 
     # ---------- Events ----------
     def set_wordpool(self):

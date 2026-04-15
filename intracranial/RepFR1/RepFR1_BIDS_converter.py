@@ -9,8 +9,8 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
     wordpool_EN = np.loadtxt('RepFR1/wordpools/wordpool_EN.txt', dtype=str)
     wordpool_SP = np.loadtxt('RepFR1/wordpools/wordpool_SP.txt', dtype=str)
     
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/RepFR1/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+    def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/RepFR1/'):
+        super().__init__(subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides, root)
 
     # ---------- Events ----------
     def set_wordpool(self):

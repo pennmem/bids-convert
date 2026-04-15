@@ -6,9 +6,9 @@ from intracranial.intracranial_BIDS_converter import intracranial_BIDS_converter
 
 class PS21_BIDS_converter(intracranial_BIDS_converter):
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions,
+    def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None,
                  root='/scratch/hherrema/BIDS/PS2.1/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+        super().__init__(subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides, root)
 
     # ---------- Events ----------
     def set_wordpool(self):

@@ -16,7 +16,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
 
     # initialize
     # just hand empty dictionary for brain_regions
-    def __init__(self, subject, experiment, session, montage, math_events, system_version, unit_scale, monopolar, bipolar, mni, tal, root='/scratch/hherrema/BIDS/pyFR/'):
+    def __init__(self, subject, experiment, session, montage, math_events, system_version, unit_scale, overrides=None, root='/scratch/hherrema/BIDS/pyFR/'):
         self.subject = subject
         self.experiment = experiment
         self.session = session
@@ -24,11 +24,8 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         self.math_events = math_events
         self.system_version = system_version
         self.unit_scale = unit_scale
-        self.monopolar = monopolar
-        self.bipolar = bipolar
-        self.mni = mni
-        self.tal = tal
         self.root = root
+        self.overrides = overrides or {}
 
     # ---------- BIDS Utility ---------
     # return a base BIDS_path object to update
@@ -182,41 +179,51 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         contacts['type'] = [x if type(x)==str else 'n/a' for x in contacts.type]      # replace missing types with 'n/a'
         return contacts
     
-    def contacts_to_electrodes(self, atlas, toggle):
-        electrodes = pd.DataFrame({'name': np.array(self.contacts.label)})             # name = label of contact
-        if toggle:    # both tal and mni
+    def _load_mni_coords(self):
+        """Load the per-subject MNI coords text file. Returns Nx4 array
+        ([contact, x, y, z]) or None if the file isn't available."""
+        try:
+            if self.montage != 0:
+                path = f'/data/eeg/{self.subject}_{self.montage}/tal/RAW_coords.txt.mni'
+            else:
+                path = f'/data/eeg/{self.subject}/tal/RAW_coords.txt.mni'
+            return np.loadtxt(path)
+        except (OSError, ValueError):
+            return None
+
+    def _available_cml_spaces(self):
+        available = []
+        cols = set(self.contacts.columns)
+        if {'x', 'y', 'z'}.issubset(cols):
+            available.append('tal')
+        if self._load_mni_coords() is not None:
+            available.append('mni')
+        return available
+
+    def contacts_to_electrodes(self, cml_space):
+        # Import here to avoid a cycle with the package __init__.
+        from ..intracranial_BIDS_converter import CML_TO_BIDS_SPACE  # noqa: F401
+
+        electrodes = pd.DataFrame({'name': np.array(self.contacts.label)})
+
+        if cml_space == 'tal':
             electrodes['x'] = self.contacts['x'].astype(float)
             electrodes['y'] = self.contacts['y'].astype(float)
             electrodes['z'] = self.contacts['z'].astype(float)
-            if self.montage != 0:
-                mni_coords = np.loadtxt(f'/data/eeg/{self.subject}_{self.montage}/tal/RAW_coords.txt.mni')
-            else:
-                mni_coords = np.loadtxt(f'/data/eeg/{self.subject}/tal/RAW_coords.txt.mni')
-            contacts_mask = []
-            for i, c in enumerate(mni_coords[:,0]):
-                if int(c) in np.array(self.contacts.contact):
-                    contacts_mask.append(i)
+        elif cml_space == 'mni':
+            mni_coords = self._load_mni_coords()
+            contacts_mask = [
+                i for i, c in enumerate(mni_coords[:, 0])
+                if int(c) in np.array(self.contacts.contact)
+            ]
             mni_contacts = mni_coords[contacts_mask, :]
-            electrodes['mni.x'] = mni_contacts[:,1]
-            electrodes['mni.y'] = mni_contacts[:, 2]
-            electrodes['mni.z'] = mni_contacts[:, 3]
-        elif atlas == 'tal':                                                           # tal coordinates from dataframe
-            electrodes['x'] = self.contacts['x'].astype(float)
-            electrodes['y'] = self.contacts['y'].astype(float)
-            electrodes['z'] = self.contacts['z'].astype(float)
-        elif atlas == 'mni':                                                           # manually read in mni coordinates
-            if self.montage != 0:
-                mni_coords = np.loadtxt(f'/data/eeg/{self.subject}_{self.montage}/tal/RAW_coords.txt.mni')
-            else:
-                mni_coords = np.loadtxt(f'/data/eeg/{self.subject}/tal/RAW_coords.txt.mni')
-            contacts_mask = []
-            for i, c in enumerate(mni_coords[:,0]):
-                if int(c) in np.array(self.contacts.contact):
-                    contacts_mask.append(i)
-            mni_contacts = mni_coords[contacts_mask, :]
-            electrodes['x'] = mni_contacts[:,1]
-            electrodes['y'] = mni_contacts[:,2]
-            electrodes['z'] = mni_contacts[:,3]
+            electrodes['x'] = mni_contacts[:, 1]
+            electrodes['y'] = mni_contacts[:, 2]
+            electrodes['z'] = mni_contacts[:, 3]
+        else:
+            electrodes['x'] = np.nan
+            electrodes['y'] = np.nan
+            electrodes['z'] = np.nan
 
         electrodes['size'] = -999
         electrodes['group'] = np.array(self.contacts.grpName)
@@ -226,62 +233,30 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         electrodes['region1'] = np.array(self.contacts.Loc3)
         electrodes['region2'] = np.array(self.contacts.Loc5)
         electrodes['gray_white'] = np.array(self.contacts.Loc4)
-        electrodes = electrodes.fillna('n/a')                                          # remove NaN
-        electrodes = electrodes.replace('', 'n/a')                                     # no empty cells
-        if toggle:
-            electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type', 
-                                     'lobe', 'region1', 'region2', 'gray_white', 'mni.x', 'mni.y', 'mni.z',]]
-        else:
-            electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type', 
-                                    'lobe', 'region1', 'region2', 'gray_white']]      # enforce column order
+        electrodes = electrodes.fillna('n/a')
+        electrodes = electrodes.replace('', 'n/a')
+        electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type',
+                                 'lobe', 'region1', 'region2', 'gray_white']]
         return electrodes
-    
-    def make_electrodes_sidecar(self, atlas, toggle):
-        sidecar = {'name': 'Label of electrode'}
-        if atlas == 'tal':
-            sidecar['x'] = 'x-axis position in Talairach coordinates'
-            sidecar['y'] = 'y-axis position in Talairach coordinates'
-            sidecar['z'] = 'z-axis position in Talairach coordinates'
-        elif atlas == 'mni':
-            sidecar['x'] = 'x-axis position in MNI coordinates'
-            sidecar['y'] = 'y-axis position in MNI coordinates'
-            sidecar['z'] = 'z-axis position in MNI coordinates'
-        sidecar['size'] = 'Surface area of electrode.'
-        sidecar['group'] = 'Group of channels electrode belongs to (same shank).'
-        sidecar['hemisphere'] = 'Hemisphere of electrode location.'
-        sidecar['type'] = 'Type of electrode.'
-        sidecar['lobe'] = 'Brain lobe of electrode location.'
-        sidecar['region1'] = 'Brain region of electrode location.'
-        sidecar['region2'] = 'Brain region of electrode location.'
-        sidecar['gray_white'] = 'Denotes gray or white matter.'
 
-        # both Tal and MNI
-        if toggle:
-            sidecar['mni.x'] = 'x-axis position in MNI coordinates'
-            sidecar['mni.y'] = 'y-axis position in MNI coordinates'
-            sidecar['mni.z'] = 'z-axis position in MNI coordinates'
-
+    def make_electrodes_sidecar(self, cml_space):
+        from ..intracranial_BIDS_converter import CML_TO_BIDS_SPACE
+        bids_space = CML_TO_BIDS_SPACE[cml_space]
+        sidecar = {
+            'name': 'Label of electrode',
+            'x': f'x-axis position in {bids_space} coordinates',
+            'y': f'y-axis position in {bids_space} coordinates',
+            'z': f'z-axis position in {bids_space} coordinates',
+            'size': 'Surface area of electrode.',
+            'group': 'Group of channels electrode belongs to (same shank).',
+            'hemisphere': 'Hemisphere of electrode location.',
+            'type': 'Type of electrode.',
+            'lobe': 'Brain lobe of electrode location.',
+            'region1': 'Brain region of electrode location.',
+            'region2': 'Brain region of electrode location.',
+            'gray_white': 'Denotes gray or white matter.',
+        }
         return sidecar
-    
-    def write_BIDS_electrodes(self, atlas, toggle):
-        bids_path = self._BIDS_path().update(suffix='electrodes', extension='.tsv', datatype='ieeg')
-        # both Tal and MNI, default to Tal (mirror cmlreaders)
-        if toggle:
-            bids_path.update(space='Talairach')
-            os.makedirs(bids_path.directory, exist_ok=True)
-            self._to_tsv(self.electrodes, bids_path.fpath)
-        elif atlas == 'tal':
-            bids_path.update(space='Talairach')
-            os.makedirs(bids_path.directory, exist_ok=True)
-            self._to_tsv(self.electrodes_tal, bids_path.fpath)
-        elif atlas == 'mni':
-            bids_path.update(space='MNI152NLin6ASym')
-            os.makedirs(bids_path.directory, exist_ok=True)
-            self._to_tsv(self.electrodes_mni, bids_path.fpath)
-
-        # also write sidecar json
-        with open(bids_path.update(extension='.json').fpath, 'w') as f:
-            json.dump(fp=f, obj=self.electrodes_sidecar)
     
     # ---------- Channels ----------
     def load_pairs(self):
@@ -374,57 +349,87 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     # ---------------------------------
     # run conversion
     def run(self):
-        # ---------- Events ----------
         self.reader = self.cml_reader()
-        self.wordpool_file = self.set_wordpool()
-        self.events = self.events_to_BIDS()
-        self.events_descriptor = self.make_events_descriptor()
-        self.write_BIDS_beh()
 
-        # terminate if no monopolar or bipolar EEG
-        if not self.monopolar and not self.bipolar:
-            return True
+        # ---------- Behavioral ----------
+        if self._should_run('behavioral'):
+            self.wordpool_file = self.set_wordpool()
+            self.events = self.events_to_BIDS()
+            self.events_descriptor = self.make_events_descriptor()
+            self.write_BIDS_beh()
+        else:
+            print(f"SKIP: behavioral outputs exist for {self.subject}/{self.experiment}/ses-{self.session}")
 
-        # ---------- EEG ----------
-        self.sfreq, self.recording_duration = self.eeg_metadata()
+        # We always attempt both monopolar and bipolar; per-acquisition
+        # blocks below catch and warn on missing data instead of crashing.
+        run_mono_eeg = self._should_run('mono-eeg')
+        run_bi_eeg = self._should_run('bi-eeg')
+        run_mono_channels = self._should_run('mono-channels')
+        run_bi_channels = self._should_run('bi-channels')
+        run_electrodes = self._should_run('electrodes')
+
+        needs_eeg_meta = run_mono_eeg or run_bi_eeg or run_mono_channels or run_bi_channels
+        needs_contacts = run_electrodes or run_mono_eeg or run_mono_channels
+        needs_pairs = run_bi_eeg or run_bi_channels
+
+        if needs_eeg_meta:
+            self.sfreq, self.recording_duration = self.eeg_metadata()
+
+        if needs_contacts:
+            self.contacts = self.load_contacts()
 
         # ---------- Electrodes ----------
-        self.contacts = self.load_contacts()
+        if run_electrodes:
+            available = self._available_cml_spaces()
+            if not available:
+                print(f"WARNING: no known CML coordinate spaces found for {self.subject}")
+            for cml_space in available:
+                electrodes = self.contacts_to_electrodes(cml_space)
+                sidecar = self.make_electrodes_sidecar(cml_space)
+                self.write_BIDS_electrodes(cml_space, electrodes, sidecar)
+                self.write_BIDS_coords(cml_space)
+        else:
+            print(f"SKIP: electrodes outputs exist for {self.subject}/{self.experiment}/ses-{self.session}")
 
-        # both Talairach and MNI coordinates (default to Tal)
-        if self.tal and self.mni:
-            self.electrodes = self.contacts_to_electrodes('tal', True)
-            self.electrodes_sidecar = self.make_electrodes_sidecar('tal', True)
-            self.write_BIDS_electrodes('tal', True)
-            self.write_BIDS_coords('tal')
-        elif self.tal:
-            self.electrodes_tal = self.contacts_to_electrodes('tal', False)
-            self.electrodes_sidecar = self.make_electrodes_sidecar('tal', False)
-            self.write_BIDS_electrodes('tal', False)
-            self.write_BIDS_coords('tal')
-        elif self.mni:
-            self.electrodes_mni = self.contacts_to_electrodes('mni', False)
-            self.electrodes_sidecar = self.make_electrodes_sidecar('mni', False)
-            self.write_BIDS_electrodes('mni', False)
-            self.write_BIDS_coords('mni')
+        # ---------- Bipolar (channels + EEG) ----------
+        if needs_pairs:
+            try:
+                self.pairs = self.load_pairs()
+            except Exception as e:
+                print(f"WARNING: bipolar pairs unavailable for {self.subject}/{self.experiment}/ses-{self.session} — skipping bipolar stages ({type(e).__name__}: {e})")
+                run_bi_channels = run_bi_eeg = False
 
-        # ---------- Channels ----------
-        self.pairs = self.load_pairs()
-        if self.bipolar:
-            self.channels_bi = self.pairs_to_channels()
-        if self.monopolar:
-            self.channels_mono = self.contacts_to_channels()
+        if run_bi_channels:
+            try:
+                self.channels_bi = self.pairs_to_channels()
+            except Exception as e:
+                print(f"WARNING: bi-channels failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
+                run_bi_channels = False
 
-        # ---------- EEG ----------
-        if self.bipolar:
-            self.eeg_sidecar_bi = self.eeg_sidecar('bipolar')
-            self.eeg_bi = self.eeg_bi_to_BIDS()
-            self.write_BIDS_ieeg('bipolar')
-            self.write_BIDS_channels('bipolar')
-        if self.monopolar:
-            self.eeg_sidecar_mono = self.eeg_sidecar('monopolar')
-            self.eeg_mono = self.eeg_mono_to_BIDS()
-            self.write_BIDS_ieeg('monopolar')
-            self.write_BIDS_channels('monopolar')
+        if run_bi_eeg:
+            try:
+                self.eeg_sidecar_bi = self.eeg_sidecar('bipolar')
+                self.eeg_bi = self.eeg_bi_to_BIDS()
+                self.write_BIDS_ieeg('bipolar')
+                self.write_BIDS_channels('bipolar')
+            except Exception as e:
+                print(f"WARNING: bi-eeg failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
+
+        # ---------- Monopolar (channels + EEG) ----------
+        if run_mono_channels:
+            try:
+                self.channels_mono = self.contacts_to_channels()
+            except Exception as e:
+                print(f"WARNING: mono-channels failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
+                run_mono_channels = False
+
+        if run_mono_eeg:
+            try:
+                self.eeg_sidecar_mono = self.eeg_sidecar('monopolar')
+                self.eeg_mono = self.eeg_mono_to_BIDS()
+                self.write_BIDS_ieeg('monopolar')
+                self.write_BIDS_channels('monopolar')
+            except Exception as e:
+                print(f"WARNING: mono-eeg failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
 
         return True

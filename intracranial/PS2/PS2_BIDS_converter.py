@@ -15,9 +15,9 @@ PS21_BIDS_converter = _ps21_module.PS21_BIDS_converter
 
 class PS2_BIDS_converter(PS21_BIDS_converter):
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions,
+    def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None,
                  root='/scratch/hherrema/BIDS/PS2/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+        super().__init__(subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides, root)
 
     # ---------- Events ----------
     def apply_event_durations(self, events):
