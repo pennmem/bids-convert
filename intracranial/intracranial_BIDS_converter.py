@@ -866,6 +866,8 @@ class intracranial_BIDS_converter:
     def run(self):
         self.reader = self.cml_reader()
 
+        print(f"DEBUG: overrides={self.overrides} root={self.root} session_dir={self._session_dir('ieeg')}")
+
         # ---------- Behavioral ----------
         if self._should_run('behavioral'):
             self.wordpool_file = self.set_wordpool()
@@ -883,6 +885,10 @@ class intracranial_BIDS_converter:
         run_mono_channels = self._should_run('mono-channels')
         run_bi_channels = self._should_run('bi-channels')
         run_electrodes = self._should_run('electrodes')
+
+        print(f"DEBUG: run_electrodes={run_electrodes} "
+              f"run_mono_eeg={run_mono_eeg} run_bi_eeg={run_bi_eeg} "
+              f"run_mono_channels={run_mono_channels} run_bi_channels={run_bi_channels}")
 
         needs_eeg_meta = run_mono_eeg or run_bi_eeg or run_mono_channels or run_bi_channels
         needs_contacts = run_electrodes or run_mono_eeg or run_mono_channels
@@ -925,6 +931,7 @@ class intracranial_BIDS_converter:
         # when write_BIDS_channels overwrites it (or so the file exists
         # for the channels stage to target on a re-run).
         if run_bi_eeg:
+            print(f"WRITING: bi-eeg for {self.subject}/{self.experiment}/ses-{self.session}")
             try:
                 self.eeg_sidecar_bi = self.eeg_sidecar('bipolar')
                 self.eeg_bi = self.eeg_bi_to_BIDS()
@@ -933,6 +940,7 @@ class intracranial_BIDS_converter:
                 print(f"WARNING: bi-eeg failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
 
         if run_bi_channels:
+            print(f"WRITING: bi-channels for {self.subject}/{self.experiment}/ses-{self.session}")
             try:
                 self.channels_bi = self.pairs_to_channels()
                 self.write_BIDS_channels('bipolar')
@@ -942,6 +950,7 @@ class intracranial_BIDS_converter:
 
         # ---------- Monopolar (channels + EEG) ----------
         if run_mono_eeg:
+            print(f"WRITING: mono-eeg for {self.subject}/{self.experiment}/ses-{self.session}")
             try:
                 self.eeg_sidecar_mono = self.eeg_sidecar('monopolar')
                 self.eeg_mono = self.eeg_mono_to_BIDS()
@@ -950,6 +959,7 @@ class intracranial_BIDS_converter:
                 print(f"WARNING: mono-eeg failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
 
         if run_mono_channels:
+            print(f"WRITING: mono-channels for {self.subject}/{self.experiment}/ses-{self.session}")
             try:
                 self.channels_mono = self.contacts_to_channels()
                 self.write_BIDS_channels('monopolar')
