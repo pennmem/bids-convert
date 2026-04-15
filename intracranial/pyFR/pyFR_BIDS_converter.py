@@ -386,10 +386,13 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
 
         # ---------- Electrodes ----------
         if run_electrodes:
+            from ..intracranial_BIDS_converter import CML_TO_BIDS_SPACE
             available = self._available_cml_spaces()
             if not available:
                 print(f"WARNING: no known CML coordinate spaces found for {self.subject}")
             for cml_space in available:
+                bids_space = CML_TO_BIDS_SPACE[cml_space]
+                print(f"WRITING: electrodes (cml={cml_space}, space={bids_space}) for {self.subject}/{self.experiment}/ses-{self.session}")
                 electrodes = self.contacts_to_electrodes(cml_space)
                 sidecar = self.make_electrodes_sidecar(cml_space)
                 self.write_BIDS_electrodes(cml_space, electrodes, sidecar)
