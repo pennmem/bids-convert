@@ -19,17 +19,19 @@ from .edf_digital_writer import resolve_edf_units, write_digital
 # region-label atlases (not coordinate frames) — they belong as
 # *.region columns in electrodes.tsv, not as separate space-* files.
 CML_TO_BIDS_SPACE = {
+    # Standard BIDS iEEG space labels (accepted by mne_bids).
     'mni': 'MNI152NLin6ASym',
     'tal': 'Talairach',
     'avg': 'fsaverage',
+    'vox': 'Pixels',
+    # Non-standard labels. mne_bids.BIDSPath.update(space=...) rejects
+    # these, so write_BIDS_electrodes / write_BIDS_coords build the path
+    # manually instead of going through BIDSPath validation.
     'avg.corrected': 'fsaverageBrainshift',
     'ind': 'fsnative',
     'ind.corrected': 'fsnativeBrainshift',
     'ind.dural': 'fsnativeDural',
-    'vox': 'CTVoxel',
-    't1_mri': 't1MRI'
-    # TODO: 'vox' (CT voxel coords) and 't1_mri' (subject T1 native)
-    # have no BIDS-standard space name yet — decide on a custom label.
+    't1_mri': 't1MRI',
 }
 assert len(set(CML_TO_BIDS_SPACE.values())) == len(CML_TO_BIDS_SPACE), (
     "CML_TO_BIDS_SPACE has duplicate BIDS values — multiple CML keys "
@@ -339,26 +341,26 @@ class intracranial_BIDS_converter:
 
         return sidecar
 
-    def write_BIDS_electrodes(self, cml_space, electrodes, sidecar):
+    def _space_file(self, cml_space, suffix, extension):
+        """Build `sub-X_ses-Y_task-Z_space-<label>_<suffix>.<ext>` directly,
+        bypassing mne_bids.BIDSPath validation (which rejects non-standard
+        BIDS space labels like `fsnative`, `fsaverageBrainshift`, etc.)."""
         bids_space = CML_TO_BIDS_SPACE[cml_space]
-        bids_path = self._BIDS_path().update(
-            suffix='electrodes', extension='.tsv', datatype='ieeg', space=bids_space,
-        )
-        os.makedirs(bids_path.directory, exist_ok=True)
-        self._to_tsv(electrodes, bids_path.fpath)
+        ieeg_dir = self._session_dir('ieeg')
+        os.makedirs(ieeg_dir, exist_ok=True)
+        fname = f"{self._bids_prefix()}_space-{bids_space}_{suffix}{extension}"
+        return os.path.join(ieeg_dir, fname)
 
-        with open(bids_path.update(extension='.json').fpath, 'w') as f:
+    def write_BIDS_electrodes(self, cml_space, electrodes, sidecar):
+        self._to_tsv(electrodes, self._space_file(cml_space, 'electrodes', '.tsv'))
+        with open(self._space_file(cml_space, 'electrodes', '.json'), 'w') as f:
             json.dump(fp=f, obj=sidecar)
 
     def _coordinate_system(self, cml_space):
         return {'iEEGCoordinateSystem': CML_TO_BIDS_SPACE[cml_space], 'iEEGCoordinateUnits': 'mm'}
 
     def write_BIDS_coords(self, cml_space):
-        bids_space = CML_TO_BIDS_SPACE[cml_space]
-        bids_path = self._BIDS_path().update(
-            suffix='coordsystem', extension='.json', datatype='ieeg', space=bids_space,
-        )
-        with open(bids_path.fpath, 'w') as f:
+        with open(self._space_file(cml_space, 'coordsystem', '.json'), 'w') as f:
             json.dump(fp=f, obj=self._coordinate_system(cml_space))
 
     # ---------- Channels ----------
