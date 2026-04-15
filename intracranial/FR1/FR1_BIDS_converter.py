@@ -62,9 +62,10 @@ class FR1_BIDS_converter(intracranial_BIDS_converter):
         if 'test' not in events.columns:
             events['test'] = 'n/a'
         events['item_name'] = events.item_name.replace('X', 'n/a')
-        events = events.drop(columns=['is_stim', 'stim_list', 'stim_params', 'mstime', 'protocol', 'item_num', 
-                                      'iscorrect', 'eegfile', 'exp_version', 'montage', 'msoffset'])     # drop unneeded fields
-        events = events.drop(columns=['intrusion', 'recalled'])                                          # dropping because confusing
+        cols_to_drop = ['is_stim', 'stim_list', 'stim_params', 'mstime', 'protocol', 'item_num',
+                        'iscorrect', 'eegfile', 'exp_version', 'montage', 'msoffset',
+                        'intrusion', 'recalled']
+        events = events.drop(columns=[c for c in cols_to_drop if c in events.columns])
         if 'PRACTICE_WORD' in events.trial_type.unique():                                                # practice words wrongly given serial positions 0-11
             events.loc[events.trial_type=='PRACTICE_WORD', 'serialpos'] = events['serialpos'] + 1
         events = events.fillna('n/a')                                                                    # change NaN to 'n/a'
