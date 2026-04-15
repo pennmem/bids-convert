@@ -175,7 +175,13 @@ class intracranial_BIDS_converter:
 
         Returns ``(filtered_scheme, dropped_scheme_df)``.
         """
-        events = self.reader.load("events").iloc[[0]]
+        all_events = self.reader.load("events")
+        valid = all_events[all_events.eegoffset >= 0]
+        if valid.empty:
+            raise RuntimeError(
+                f"no events with valid eegoffset for {self.subject}/{self.experiment}/ses-{self.session}"
+            )
+        events = valid.iloc[[0]]
         dropped_ids = set()
         filtered = scheme.copy()
 
