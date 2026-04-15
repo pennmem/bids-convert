@@ -921,38 +921,39 @@ class intracranial_BIDS_converter:
                 print(f"WARNING: bipolar pairs unavailable for {self.subject}/{self.experiment}/ses-{self.session} — skipping bipolar stages ({type(e).__name__}: {e})")
                 run_bi_channels = run_bi_eeg = False
 
-        if run_bi_channels:
-            try:
-                self.channels_bi = self.pairs_to_channels()
-            except Exception as e:
-                print(f"WARNING: bi-channels failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
-                run_bi_channels = False
-
+        # bi-eeg runs first so its auto-generated channels.tsv is in place
+        # when write_BIDS_channels overwrites it (or so the file exists
+        # for the channels stage to target on a re-run).
         if run_bi_eeg:
             try:
                 self.eeg_sidecar_bi = self.eeg_sidecar('bipolar')
                 self.eeg_bi = self.eeg_bi_to_BIDS()
                 self.write_BIDS_ieeg('bipolar')
-                self.write_BIDS_channels('bipolar')
-                self.write_BIDS_channelmap('bipolar')
             except Exception as e:
                 print(f"WARNING: bi-eeg failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
 
-        # ---------- Monopolar (channels + EEG) ----------
-        if run_mono_channels:
+        if run_bi_channels:
             try:
-                self.channels_mono = self.contacts_to_channels()
+                self.channels_bi = self.pairs_to_channels()
+                self.write_BIDS_channels('bipolar')
+                self.write_BIDS_channelmap('bipolar')
             except Exception as e:
-                print(f"WARNING: mono-channels failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
-                run_mono_channels = False
+                print(f"WARNING: bi-channels failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
 
+        # ---------- Monopolar (channels + EEG) ----------
         if run_mono_eeg:
             try:
                 self.eeg_sidecar_mono = self.eeg_sidecar('monopolar')
                 self.eeg_mono = self.eeg_mono_to_BIDS()
                 self.write_BIDS_ieeg('monopolar')
-                self.write_BIDS_channels('monopolar')
             except Exception as e:
                 print(f"WARNING: mono-eeg failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
+
+        if run_mono_channels:
+            try:
+                self.channels_mono = self.contacts_to_channels()
+                self.write_BIDS_channels('monopolar')
+            except Exception as e:
+                print(f"WARNING: mono-channels failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
 
         return True
