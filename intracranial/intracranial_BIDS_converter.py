@@ -181,7 +181,12 @@ class intracranial_BIDS_converter:
             raise RuntimeError(
                 f"no events with valid eegoffset for {self.subject}/{self.experiment}/ses-{self.session}"
             )
-        events = valid.iloc[[0]]
+        # Try one probe per unique eegfile so split-EEG mismatches on a single
+        # file don't kill the whole session.
+        if "eegfile" in valid.columns:
+            candidates = [valid[valid.eegfile == f].iloc[[0]] for f in valid.eegfile.unique()]
+        else:
+            candidates = [valid.iloc[[0]]]
         dropped_ids = set()
         filtered = scheme.copy()
 
@@ -191,26 +196,39 @@ class intracranial_BIDS_converter:
         else:
             id_cols = [c for c in ("contact_1", "contact_2") if c in filtered.columns]
 
-        while True:
-            try:
-                self.reader.load_eeg(
-                    events=events, rel_start=0, rel_stop=50, scheme=filtered,
-                )
-                break
-            except KeyError as exc:
+        last_exc = None
+        for events in candidates:
+            while True:
                 try:
-                    missing = int(exc.args[0])
-                except (TypeError, ValueError):
-                    raise
-                n_before = len(filtered)
-                # Drop any row where ANY id column references the missing contact
-                mask = pd.Series(False, index=filtered.index)
-                for col in id_cols:
-                    mask |= (filtered[col] == missing)
-                filtered = filtered[~mask]
-                dropped_ids.add(missing)
-                if len(filtered) == n_before or filtered.empty:
-                    raise
+                    self.reader.load_eeg(
+                        events=events, rel_start=0, rel_stop=50, scheme=filtered,
+                    )
+                    last_exc = None
+                    break
+                except KeyError as exc:
+                    try:
+                        missing = int(exc.args[0])
+                    except (TypeError, ValueError):
+                        last_exc = exc
+                        break
+                    n_before = len(filtered)
+                    mask = pd.Series(False, index=filtered.index)
+                    for col in id_cols:
+                        mask |= (filtered[col] == missing)
+                    filtered = filtered[~mask]
+                    dropped_ids.add(missing)
+                    if len(filtered) == n_before or filtered.empty:
+                        last_exc = exc
+                        break
+                except ValueError as exc:
+                    # split-EEG mismatch or boundary issue on this probe event;
+                    # try the next candidate eegfile
+                    last_exc = exc
+                    break
+            if last_exc is None:
+                break
+        if last_exc is not None:
+            raise last_exc
 
         # Build the dropped df: rows from original scheme that were removed
         mask = pd.Series(False, index=scheme.index)
