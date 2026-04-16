@@ -903,14 +903,6 @@ class intracranial_BIDS_converter:
         else:
             print(f"SKIP: behavioral outputs exist for {self.subject}/{self.experiment}/ses-{self.session}")
 
-        # write_BIDS_ieeg needs self.events and self.events_descriptor even
-        # when the behavioral stage was skipped — load them if any EEG stage
-        # will run and they haven't been set yet.
-        if not hasattr(self, 'events') and (run_mono_eeg or run_bi_eeg):
-            self.wordpool_file = self.set_wordpool()
-            self.events = self.events_to_BIDS()
-            self.events_descriptor = self.make_events_descriptor()
-
         # Decide upfront which stages will run so we know what to load.
         # We always attempt both monopolar and bipolar; per-acquisition
         # blocks below catch and warn on missing data instead of crashing.
@@ -923,6 +915,14 @@ class intracranial_BIDS_converter:
         print(f"DEBUG: run_electrodes={run_electrodes} "
               f"run_mono_eeg={run_mono_eeg} run_bi_eeg={run_bi_eeg} "
               f"run_mono_channels={run_mono_channels} run_bi_channels={run_bi_channels}")
+
+        # write_BIDS_ieeg needs self.events and self.events_descriptor even
+        # when the behavioral stage was skipped — load them if any EEG stage
+        # will run and they haven't been set yet.
+        if not hasattr(self, 'events') and (run_mono_eeg or run_bi_eeg):
+            self.wordpool_file = self.set_wordpool()
+            self.events = self.events_to_BIDS()
+            self.events_descriptor = self.make_events_descriptor()
 
         needs_eeg_meta = run_mono_eeg or run_bi_eeg or run_mono_channels or run_bi_channels
         needs_contacts = run_electrodes or run_mono_eeg or run_mono_channels
