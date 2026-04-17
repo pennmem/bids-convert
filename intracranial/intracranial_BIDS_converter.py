@@ -994,12 +994,24 @@ class intracranial_BIDS_converter:
         if needs_eeg_meta:
             self.sfreq, self.recording_duration = self.eeg_metadata()
 
+        contacts_loaded = False
         if needs_contacts:
-            self.contacts = self.load_contacts()
-            # Keep the full set for electrodes.tsv (physical positions);
-            # use the filtered set for channels.tsv and EEG labels.
-            self.contacts_all = self.contacts.copy()
-            self.contacts, self.contacts_dropped = self._filter_scheme_to_recording(self.contacts, "contacts")
+            try:
+                self.contacts = self.load_contacts()
+                # Keep the full set for electrodes.tsv (physical positions);
+                # use the filtered set for channels.tsv and EEG labels.
+                self.contacts_all = self.contacts.copy()
+                self.contacts, self.contacts_dropped = self._filter_scheme_to_recording(self.contacts, "contacts")
+                contacts_loaded = True
+            except Exception as e:
+                print(f"WARNING: contacts unavailable for {self.subject}/{self.experiment}/ses-{self.session} — skipping contact-dependent stages ({type(e).__name__}: {e})")
+                if run_electrodes:
+                    self._mark_stage('electrodes', 'failed', e)
+                if run_mono_eeg:
+                    self._mark_stage('mono-eeg', 'failed', e)
+                if run_mono_channels:
+                    self._mark_stage('mono-channels', 'failed', e)
+                run_electrodes = run_mono_eeg = run_mono_channels = False
 
         # ---------- Electrodes ----------
         if run_electrodes:
