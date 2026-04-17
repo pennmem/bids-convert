@@ -57,8 +57,9 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
         events = events.fillna('n/a')                                                              # change NaN to 'n/a'
         events = events.replace('', 'n/a')                                                         # no empty cells
 
-        events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name', 'category', 
-                        'serialpos', 'list', 'test', 'answer', 'experiment', 'session', 'subject']]     # re-order columns
+        final_cols = ['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name', 'category',
+                      'serialpos', 'list', 'test', 'answer', 'experiment', 'session', 'subject']
+        events = events.reindex(columns=final_cols, fill_value='n/a')                                   # fill missing cols (e.g. test/answer when session has no math events)
         return events
     
     def apply_event_durations(self, events):
