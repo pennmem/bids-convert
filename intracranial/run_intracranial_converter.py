@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.expanduser("~/bids-convert"))
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from intracranial.intracranial_BIDS_converter import intracranial_BIDS_converter
+from conversion_error_log import ConversionErrorLog, cmlreader_involved
 
 # Converters are imported lazily (on first use) so that class-level operations
 # in each converter (e.g. loading wordpool files) only run when needed.
@@ -100,6 +101,13 @@ def convert_one_job(
     root: str,
     overrides: dict | None = None,
 ):
+    """Run one (subject, experiment, session) job and return a result dict.
+
+    Returns a dict with keys: subject, experiment, session, files_written,
+    files_not_written, any_failure, error_stage, error_type, error_message,
+    cmlreader_failure. The orchestrator consumes this to drive the per-task
+    error CSV. The dict is picklable so it round-trips through dask workers.
+    """
     Converter = _get_converter(experiment)
 
     converter = Converter(
@@ -110,7 +118,45 @@ def convert_one_job(
         overrides=overrides or {},
         root=root,
     )
-    return converter.run()
+
+    exc = None
+    try:
+        converter.run()
+    except Exception as e:
+        exc = e
+        # first_error_stage is already set by _mark_stage if the failure was
+        # inside a tracked stage; fill it in if the exception came from
+        # elsewhere (e.g. load_contacts, eeg_metadata).
+        if not getattr(converter, 'first_error_stage', None):
+            converter.first_error_stage = 'run'
+            converter.first_exception = e
+        import traceback
+        traceback.print_exc()
+
+    report = converter.stage_report()
+    error_stage = report['error_stage']
+    first_exc = report['exception'] or exc
+    if first_exc is not None:
+        error_type = type(first_exc).__name__
+        error_message = " ".join(str(first_exc).splitlines()).strip()
+        cml = cmlreader_involved(first_exc)
+    else:
+        error_type = ""
+        error_message = ""
+        cml = False
+    return {
+        'subject': str(subject),
+        'experiment': experiment,
+        'session': int(session),
+        'files_written': report['files_written'],
+        'files_not_written': report['files_not_written'],
+        'any_failure': report['any_failure'] or exc is not None,
+        'error_stage': error_stage or ('run' if exc is not None else ''),
+        'error_type': error_type,
+        'error_message': error_message,
+        'cmlreader_failure': cml,
+        'raised': exc is not None,
+    }
 
 
 def build_jobs(
@@ -400,6 +446,18 @@ examples:
     print(f"Jobs to run: {len(df_jobs)}")
     print(df_jobs.to_string(index=False))
 
+    # One error log per experiment (task) at args.root.
+    error_logs: dict[str, ConversionErrorLog] = {}
+    for exp in df_jobs["experiment"].unique():
+        error_logs[exp] = ConversionErrorLog(args.root, exp)
+    for _, row in df_jobs.iterrows():
+        error_logs[row["experiment"]].record_attempt(row["subject"], int(row["session"]))
+
+    def _record_result(result: dict):
+        log = error_logs.get(result['experiment'])
+        if log is not None:
+            log.record_result(result)
+
     # ---- SERIAL ----
     if args.serial:
         n_ok = 0
@@ -416,19 +474,27 @@ examples:
             print(f"\n[{i+1}/{len(df_jobs)}] {subj} {exp} ses-{sess} (sv={sv}, unit_scale={us})")
 
             try:
-                _ = convert_one_job(
+                result = convert_one_job(
                     subj, exp, sess, sv, us,
                     brain_regions=brain_regions,
                     root=args.root,
                     overrides=overrides,
                 )
-                n_ok += 1
-                print("✓ finished")
+                _record_result(result)
+                if result.get('any_failure') or result.get('raised'):
+                    n_fail += 1
+                    print("✗ failed")
+                else:
+                    n_ok += 1
+                    print("✓ finished")
             except Exception:
                 import traceback
                 n_fail += 1
-                print("✗ failed")
+                print("✗ failed (unexpected orchestrator error)")
                 traceback.print_exc()
+
+        for log in error_logs.values():
+            log.flush()
 
         print(f"\nDone. ok={n_ok} fail={n_fail}")
         if args.validate:
@@ -468,13 +534,21 @@ examples:
     n_fail = 0
     for fut in as_completed(futures):
         try:
-            _ = fut.result()
-            n_ok += 1
-            print("✓ finished:", fut.key)
+            result = fut.result()
+            _record_result(result)
+            if result.get('any_failure') or result.get('raised'):
+                n_fail += 1
+                print("✗ failed:", fut.key)
+            else:
+                n_ok += 1
+                print("✓ finished:", fut.key)
         except Exception as e:
             n_fail += 1
             print("✗ failed:", fut.key)
             print(e)
+
+    for log in error_logs.values():
+        log.flush()
 
     print(f"Done. ok={n_ok} fail={n_fail}")
     if args.validate:

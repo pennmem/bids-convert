@@ -2,11 +2,15 @@
 
 import argparse
 import os
+import sys
 import cmlreaders as cml
 import pandas as pd
 from ScalpBIDSConverter import *
 import cmldask.CMLDask as da
 from dask.distributed import as_completed
+
+sys.path.insert(0, os.path.expanduser("~/bids-convert"))
+from conversion_error_log import ConversionErrorLog, cmlreader_involved
 
 pd.options.display.max_columns = None
 pd.options.display.max_rows = 200
@@ -50,10 +54,20 @@ def bids_session_outputs_exist(root, subject, experiment, session):
 
 def convert_to_bids(subject, experiment, session, root, overwrite_eeg, overwrite_beh, skip_if_exists):
     """
-    Worker function. If skip_if_exists is True and outputs exist, skip.
+    Worker function. Returns a result dict with job outcome so the caller can
+    update the per-task conversion error CSV. If skip_if_exists is True and
+    outputs exist, returns a skip result with status='skip_existing' and the
+    caller does not touch the CSV (so prior error rows, if any, are preserved).
     """
     if skip_if_exists and bids_session_outputs_exist(root, subject, experiment, session):
-        return f"SKIP existing outputs: {subject} {experiment} {session}"
+        return {
+            'status': 'skip_existing',
+            'subject': str(subject),
+            'experiment': experiment,
+            'session': int(session),
+            'root': root,
+            'message': f"SKIP existing outputs: {subject} {experiment} {session}",
+        }
 
     converter = ScalpBIDSConverter(
         subject,
@@ -63,7 +77,32 @@ def convert_to_bids(subject, experiment, session, root, overwrite_eeg, overwrite
         overwrite_eeg=overwrite_eeg,
         overwrite_beh=overwrite_beh,
     )
-    return f"DONE: {subject} {experiment} {session}"
+    report = converter.stage_report()
+    exc = report['exception']
+    if exc is not None:
+        error_type = type(exc).__name__
+        error_message = " ".join(str(exc).splitlines()).strip()
+        cml_flag = cmlreader_involved(exc)
+    else:
+        error_type = ""
+        error_message = ""
+        cml_flag = False
+    return {
+        'status': 'ran',
+        'subject': str(subject),
+        'experiment': experiment,
+        'session': int(session),
+        'root': root,
+        'files_written': report['files_written'],
+        'files_not_written': report['files_not_written'],
+        'any_failure': report['any_failure'],
+        'raised': False,
+        'error_stage': report['error_stage'] or '',
+        'error_type': error_type,
+        'error_message': error_message,
+        'cmlreader_failure': cml_flag,
+        'message': f"DONE: {subject} {experiment} {session}",
+    }
 
 
 def parse_args():
@@ -183,6 +222,43 @@ if __name__ == "__main__":
     if args.session is not None:
         df_jobs = df_jobs[df_jobs["session"] == args.session]
 
+    # One error log per (per-experiment) root.
+    error_logs: dict[str, ConversionErrorLog] = {}
+    for experiment in df_jobs["experiment"].unique():
+        task_root = root + f"/{experiment}/"
+        error_logs[experiment] = ConversionErrorLog(task_root, experiment)
+
+    def _handle_result(result):
+        if not isinstance(result, dict):
+            return
+        log = error_logs.get(result.get('experiment'))
+        if log is None:
+            return
+        if result.get('status') == 'skip_existing':
+            # Don't record_attempt: leave any prior error rows untouched.
+            return
+        log.record_result(result)
+
+    def _record_unhandled_failure(subject, experiment, session, exc):
+        log = error_logs.get(experiment)
+        if log is None:
+            return
+        error_type = type(exc).__name__
+        error_message = " ".join(str(exc).splitlines()).strip()
+        log.record_result({
+            'subject': str(subject),
+            'experiment': experiment,
+            'session': int(session),
+            'files_written': [],
+            'files_not_written': list(ScalpBIDSConverter.ALL_STAGES),
+            'any_failure': True,
+            'raised': True,
+            'error_stage': 'run',
+            'error_type': error_type,
+            'error_message': error_message,
+            'cmlreader_failure': cmlreader_involved(exc),
+        })
+
     # ---------------- SEQUENTIAL MODE ----------------
     if args.sequential:
         print("Running SEQUENTIALLY (no Dask)\n")
@@ -190,20 +266,25 @@ if __name__ == "__main__":
         for _, row in df_jobs.iterrows():
             subject, experiment, session = row["subject"], row["experiment"], row["session"]
             try:
-                msg = convert_to_bids(
+                result = convert_to_bids(
                     subject, experiment, session,
                     root=root + f"/{experiment}/",
                     overwrite_eeg=args.overwrite_eeg,
                     overwrite_beh=args.overwrite_beh,
                     skip_if_exists=skip_if_exists,
                 )
-                if msg.startswith("SKIP"):
+                _handle_result(result)
+                msg = result.get('message', '') if isinstance(result, dict) else str(result)
+                if isinstance(result, dict) and result.get('status') == 'skip_existing':
                     print(f"↷ {msg}")
+                elif isinstance(result, dict) and result.get('any_failure'):
+                    print(f"✗ {msg}")
                 else:
                     print(f"✓ {msg}")
             except Exception as e:
                 print(f"✗ FAILED: {subject} {experiment} {session}")
                 print(e)
+                _record_unhandled_failure(subject, experiment, session, e)
 
     # ---------------- PARALLEL MODE ----------------
     else:
@@ -220,6 +301,14 @@ if __name__ == "__main__":
 
         roots = [root + f"/{exp}/" for exp in df_jobs["experiment"].tolist()]
 
+        # Key futures back to (subject, experiment, session) so we can record
+        # unhandled worker exceptions against the right job.
+        job_keys = list(zip(
+            df_jobs["subject"].tolist(),
+            df_jobs["experiment"].tolist(),
+            df_jobs["session"].tolist(),
+        ))
+
         futures = client.map(
             convert_to_bids,
             df_jobs["subject"].tolist(),
@@ -230,14 +319,25 @@ if __name__ == "__main__":
             overwrite_beh=args.overwrite_beh,
             skip_if_exists=skip_if_exists,
         )
+        future_to_job = dict(zip(futures, job_keys))
 
         for future in as_completed(futures):
             try:
-                msg = future.result()
-                if isinstance(msg, str) and msg.startswith("SKIP"):
+                result = future.result()
+                _handle_result(result)
+                msg = result.get('message', '') if isinstance(result, dict) else str(result)
+                if isinstance(result, dict) and result.get('status') == 'skip_existing':
                     print(f"↷ {msg}")
+                elif isinstance(result, dict) and result.get('any_failure'):
+                    print(f"✗ {msg}")
                 else:
                     print(f"✓ {msg}")
             except Exception as e:
                 print("✗ failed:", future.key)
                 print(e)
+                job = future_to_job.get(future)
+                if job is not None:
+                    _record_unhandled_failure(*job, e)
+
+    for log in error_logs.values():
+        log.flush()

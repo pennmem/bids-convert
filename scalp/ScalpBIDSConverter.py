@@ -116,6 +116,29 @@ class ScalpBIDSConverter:
                 out.append("v")
         return "".join(out)
 
+    ALL_STAGES = ('behavioral', 'eeg')
+
+    def stage_report(self):
+        outcomes = getattr(self, 'stage_outcomes', {})
+        written = [s for s in self.ALL_STAGES if outcomes.get(s) == 'ok']
+        not_written = [s for s in self.ALL_STAGES if outcomes.get(s) in ('failed', 'not_run', None)]
+        any_failure = any(outcomes.get(s) == 'failed' for s in self.ALL_STAGES)
+        return {
+            'files_written': written,
+            'files_not_written': not_written,
+            'any_failure': any_failure,
+            'error_stage': getattr(self, 'first_error_stage', None),
+            'exception': getattr(self, 'first_exception', None),
+        }
+
+    def _mark_stage(self, stage, outcome, exc=None):
+        if not hasattr(self, 'stage_outcomes'):
+            self.stage_outcomes = {}
+        self.stage_outcomes[stage] = outcome
+        if outcome == 'failed' and exc is not None and not hasattr(self, 'first_exception'):
+            self.first_exception = exc
+            self.first_error_stage = stage
+
     def __init__(self, subject, experiment, session, root="/scratch/PEERS_BIDS/",
                  overwrite_eeg=True, overwrite_beh=True):
         self.root = root
@@ -127,16 +150,26 @@ class ScalpBIDSConverter:
         self.subject = self._sanitize_bids_label(subject)
         self.experiment = experiment
         self.session = session
+        self.stage_outcomes = {s: 'not_run' for s in self.ALL_STAGES}
+
         self.load_subject_info()
         self.set_wordpool()
         try:
             self.events = self.load_events(beh_only=True)
         except FileNotFoundError as exc:
+            self._mark_stage('behavioral', 'failed', exc)
             print(f"[SKIP] No events found for {subject}, {experiment}, session {session}: {exc}")
             return
-        self.make_event_descriptors()
-        self.write_bids_beh(overwrite=overwrite_beh)
-        try: 
+        try:
+            self.make_event_descriptors()
+            self.write_bids_beh(overwrite=overwrite_beh)
+            self._mark_stage('behavioral', 'ok')
+        except Exception as exc:
+            self._mark_stage('behavioral', 'failed', exc)
+            print(f"[WARN] Behavioral conversion failed for "
+                  f"{self.subject}, {self.experiment}, session {self.session}: {exc}")
+            return
+        try:
             self.raw_filepath = self.locate_raw_file()
             if self.raw_filepath.endswith(".bz2"):
                 self.unzip_raw_files()
@@ -146,7 +179,9 @@ class ScalpBIDSConverter:
             self.events = self.load_events()
             self.write_bids_eeg(temp_path=f"/home1/zrentala/.temp/{int(time.time()*100)}_temp.edf",
                                 overwrite=overwrite_eeg)
+            self._mark_stage('eeg', 'ok')
         except Exception as exc:
+            self._mark_stage('eeg', 'failed', exc)
             msg = (
                 f"[WARN] EEG conversion failed for "
                 f"{self.subject}, {self.experiment}, session {self.session}: {exc}"

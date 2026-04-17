@@ -44,12 +44,16 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV') | 
                   (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0 
         events['stim_file'] = np.where((events.trial_type=='WORD') & (events.list!=-1), self.wordpool_file, 'n/a')     # add wordpool to word events
-        events.loc[events.answer==-999, 'answer'] = 'n/a'                                          # non-math events no answer
+        if 'answer' in events.columns:
+            events['answer'] = events['answer'].astype(object)                                     # allow mixed int/'n/a' values
+            events.loc[events.answer==-999, 'answer'] = 'n/a'                                      # non-math events no answer
+        else:
+            events['answer'] = 'n/a'                                                               # session has no math events
         events['item_name'] = events.item_name.replace('X', 'n/a')
         events['category'] = events.category.replace('X', 'n/a')
-        events = events.drop(columns=['is_stim', 'stim_list', 'stim_params', 'mstime', 'protocol', 'item_num', 'iscorrect', 'eegfile', 'exp_version', 
-                                      'montage', 'msoffset', 'category_num'])                      # drop unneeded fields
-        events = events.drop(columns=['intrusion', 'recalled'])
+        events = events.drop(columns=['is_stim', 'stim_list', 'stim_params', 'mstime', 'protocol', 'item_num', 'iscorrect', 'eegfile', 'exp_version',
+                                      'montage', 'msoffset', 'category_num'], errors='ignore')     # drop unneeded fields
+        events = events.drop(columns=['intrusion', 'recalled'], errors='ignore')
         events = events.fillna('n/a')                                                              # change NaN to 'n/a'
         events = events.replace('', 'n/a')                                                         # no empty cells
 
