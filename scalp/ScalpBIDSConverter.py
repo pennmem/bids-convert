@@ -177,8 +177,15 @@ class ScalpBIDSConverter:
             self.raw_file = self.load_scalp_eeg()
             self.set_montage()
             self.events = self.load_events()
-            self.write_bids_eeg(temp_path=f"/home1/zrentala/.temp/{int(time.time()*100)}_temp.edf",
-                                overwrite=overwrite_eeg)
+            # Temp EDF goes in the current user's home dir so the
+            # script works regardless of which user runs it (e.g.
+            # RAM_maint cannot write under /home1/zrentala/).
+            temp_dir = os.path.join(os.path.expanduser("~"), ".temp")
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_edf = os.path.join(
+                temp_dir, f"{int(time.time() * 100)}_{os.getpid()}_temp.edf"
+            )
+            self.write_bids_eeg(temp_path=temp_edf, overwrite=overwrite_eeg)
             self._mark_stage('eeg', 'ok')
         except Exception as exc:
             self._mark_stage('eeg', 'failed', exc)
