@@ -296,7 +296,7 @@ if __name__ == "__main__":
             max_n_jobs=20,
             threads_per_job=1,
             adapt=True,
-            log_directory="~/logs/",
+            log_directory="~/logs/ltpFR2_convert/",
         )
 
         roots = [root + f"/{exp}/" for exp in df_jobs["experiment"].tolist()]
