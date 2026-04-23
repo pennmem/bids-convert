@@ -292,8 +292,8 @@ if __name__ == "__main__":
 
         client = da.new_dask_client_slurm(
             job_name="bids_convert",
-            memory_per_job="50GB",
-            max_n_jobs=10,
+            memory_per_job="100GB",
+            max_n_jobs=20,
             threads_per_job=1,
             adapt=True,
             log_directory="~/logs/",
