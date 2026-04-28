@@ -8,10 +8,21 @@ import os
 from scipy.io import loadmat
 # from ScalpBIDSConverter import *
 import cmldask.CMLDask as da
+from distributed.diagnostics.plugin import WorkerPlugin
 import os, sys, importlib
 
 # add the package ROOT, not the intracranial folder
 sys.path.insert(0, os.path.expanduser("~/bids-convert"))
+
+
+class _BidsConvertPath(WorkerPlugin):
+    """Make ~/bids-convert importable on every worker (current + adaptive)."""
+
+    def setup(self, worker):
+        import sys, os
+        p = os.path.expanduser("~/bids-convert")
+        if p not in sys.path:
+            sys.path.insert(0, p)
 
 import intracranial.run_intracranial_convert_maint as rim
 importlib.reload(rim)  # if you edited it recently
@@ -95,13 +106,15 @@ if __name__ == "__main__":
     df_subset = pd.concat(dfs, ignore_index=True)
     
     log_dir = os.path.expanduser("~/logs/")
+    os.makedirs(log_dir, exist_ok=True)
     client = da.new_dask_client_slurm(
         job_name="bids_convert",
         memory_per_job="50GB",
-        max_n_jobs=10, threads_per_job=1, 
+        max_n_jobs=10, threads_per_job=1,
         adapt=True,
         log_directory=log_dir,
     )
+    client.register_worker_plugin(_BidsConvertPath())
     conversion_df = pd.read_csv('system_1_unit_conversions.csv')
     df_jobs = df_subset[["subject", "experiment", "session", "system_version"]].copy()
 

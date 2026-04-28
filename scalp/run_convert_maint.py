@@ -8,6 +8,17 @@ import pandas as pd
 from ScalpBIDSConverter import *
 import cmldask.CMLDask as da
 from dask.distributed import as_completed
+from distributed.diagnostics.plugin import WorkerPlugin
+
+
+class _BidsConvertPath(WorkerPlugin):
+    """Make ~/bids-convert importable on every worker (current + adaptive)."""
+
+    def setup(self, worker):
+        import sys, os
+        p = os.path.expanduser("~/bids-convert")
+        if p not in sys.path:
+            sys.path.insert(0, p)
 
 sys.path.insert(0, os.path.expanduser("~/bids-convert"))
 from conversion_error_log import ConversionErrorLog, cmlreader_involved
@@ -300,6 +311,7 @@ if __name__ == "__main__":
             adapt=True,
             log_directory=log_dir,
         )
+        client.register_worker_plugin(_BidsConvertPath())
 
         roots = [root + f"/{exp}/" for exp in df_jobs["experiment"].tolist()]
 
