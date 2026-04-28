@@ -290,13 +290,15 @@ if __name__ == "__main__":
     else:
         print("Running in PARALLEL via Slurm+Dask\n")
 
+        log_dir = os.path.expanduser("~/logs/ltpFR2_convert/")
+        os.makedirs(log_dir, exist_ok=True)
         client = da.new_dask_client_slurm(
             job_name="bids_convert",
             memory_per_job="100GB",
             max_n_jobs=20,
             threads_per_job=1,
             adapt=True,
-            log_directory="~/logs/ltpFR2_convert/",
+            log_directory=log_dir,
         )
 
         roots = [root + f"/{exp}/" for exp in df_jobs["experiment"].tolist()]
