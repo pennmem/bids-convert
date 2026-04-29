@@ -110,14 +110,32 @@ def convert_one_job(
     """
     Converter = _get_converter(experiment)
 
-    converter = Converter(
-        subject, experiment, session,
-        system_version, unit_scale,
-        False,           # area
-        brain_regions,
-        overrides=overrides or {},
-        root=root,
-    )
+    if experiment == "pyFR":
+        # pyFR has its own constructor signature: (subject, experiment, session,
+        # montage, math_events, system_version, unit_scale,
+        # monopolar, bipolar, mni, tal, overrides=None, root=...).
+        # Defaults match run_intracranial_convert_maint.py.
+        converter = Converter(
+            subject, experiment, session,
+            0,               # montage
+            False,           # math_events
+            system_version, unit_scale,
+            True,            # monopolar
+            True,            # bipolar
+            True,            # mni
+            False,           # tal
+            overrides=overrides or {},
+            root=root,
+        )
+    else:
+        converter = Converter(
+            subject, experiment, session,
+            system_version, unit_scale,
+            False,           # area
+            brain_regions,
+            overrides=overrides or {},
+            root=root,
+        )
 
     exc = None
     try:

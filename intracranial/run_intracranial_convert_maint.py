@@ -47,7 +47,7 @@ from intracranial.YC2.YC2_BIDS_converter import YC2_BIDS_converter
 
 # %matplotlib inline
 
-def convert_to_bids(subject, experiment, session,system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root="/home1/maint/LTP_BIDS/"):
+def convert_to_bids(subject, experiment, session,system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root="/home1/maint/LTP_BIDS/", montage=0, math_events=False, overrides=None):
     # if os.path.exists(f"/data8/PEERS_BIDS/sub-{subject}/ses-{session}/eeg/sub-{subject}_ses-{session}_task-{experiment}_events.json"):
     #     if (os.path.getmtime(f"/data8/PEERS_BIDS/sub-{subject}/ses-{session}/eeg/sub-{subject}_ses-{session}_task-{experiment}_events.json") > 1684160000):
     #         return True
@@ -65,7 +65,7 @@ def convert_to_bids(subject, experiment, session,system_version, unit_scale, mon
     elif experiment == "PAL2":
         converter = PAL2_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
     elif experiment == "pyFR":
-        converter = pyFR_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
+        converter = pyFR_BIDS_converter(subject, experiment, session, montage, math_events, system_version, unit_scale, monopolar, bipolar, mni, tal, overrides=overrides, root=root)
     elif experiment == "RepFR1":
         converter = RepFR1_BIDS_converter(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root=root)
     elif experiment == "YC1":
