@@ -159,6 +159,13 @@ class ScalpBIDSConverter:
         self.set_wordpool()
 
         # ---------- Behavioral ----------
+        # When _should_run picks a stage (because outputs are missing OR
+        # --override-<stage> was passed), overwrite is the natural
+        # consequence; the legacy --overwrite-* flags only matter when a
+        # stage runs without override and partial outputs exist.
+        eeg_overwrite = overwrite_eeg or bool(self.overrides.get('eeg'))
+        beh_overwrite = overwrite_beh or bool(self.overrides.get('behavioral'))
+
         if self._should_run('behavioral'):
             try:
                 self.events = self.load_events(beh_only=True)
@@ -168,7 +175,7 @@ class ScalpBIDSConverter:
                 return
             try:
                 self.make_event_descriptors()
-                self.write_bids_beh(overwrite=overwrite_beh)
+                self.write_bids_beh(overwrite=beh_overwrite)
                 self._mark_stage('behavioral', 'ok')
             except Exception as exc:
                 self._mark_stage('behavioral', 'failed', exc)
@@ -213,7 +220,7 @@ class ScalpBIDSConverter:
                 temp_edf = os.path.join(
                     temp_dir, f"{int(time.time() * 100)}_{os.getpid()}_temp.edf"
                 )
-                self.write_bids_eeg(temp_path=temp_edf, overwrite=overwrite_eeg)
+                self.write_bids_eeg(temp_path=temp_edf, overwrite=eeg_overwrite)
                 self._mark_stage('eeg', 'ok')
             except Exception as exc:
                 self._mark_stage('eeg', 'failed', exc)
