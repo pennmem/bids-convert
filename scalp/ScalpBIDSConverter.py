@@ -116,11 +116,13 @@ class ScalpBIDSConverter:
                 out.append("v")
         return "".join(out)
 
-    ALL_STAGES = ('behavioral', 'eeg')
+    # Stage outcomes: 'ok' (wrote), 'skipped' (outputs exist and not
+    # overridden), 'failed', 'not_run'. Files-on-disk = ok + skipped.
+    ALL_STAGES = ('behavioral', 'eeg', 'montage')
 
     def stage_report(self):
         outcomes = getattr(self, 'stage_outcomes', {})
-        written = [s for s in self.ALL_STAGES if outcomes.get(s) == 'ok']
+        written = [s for s in self.ALL_STAGES if outcomes.get(s) in ('ok', 'skipped')]
         not_written = [s for s in self.ALL_STAGES if outcomes.get(s) in ('failed', 'not_run', None)]
         any_failure = any(outcomes.get(s) == 'failed' for s in self.ALL_STAGES)
         return {
@@ -140,7 +142,7 @@ class ScalpBIDSConverter:
             self.first_error_stage = stage
 
     def __init__(self, subject, experiment, session, root="/scratch/PEERS_BIDS/",
-                 overwrite_eeg=True, overwrite_beh=True):
+                 overwrite_eeg=True, overwrite_beh=True, overrides=None):
         self.root = root
         # The on-disk / CMLReader subject label may contain characters
         # BIDS forbids in entity values (e.g. 'LTP220_03'). Keep the
@@ -150,25 +152,40 @@ class ScalpBIDSConverter:
         self.subject = self._sanitize_bids_label(subject)
         self.experiment = experiment
         self.session = session
+        self.overrides = overrides or {}
         self.stage_outcomes = {s: 'not_run' for s in self.ALL_STAGES}
 
         self.load_subject_info()
         self.set_wordpool()
-        try:
-            self.events = self.load_events(beh_only=True)
-        except FileNotFoundError as exc:
-            self._mark_stage('behavioral', 'failed', exc)
-            print(f"[SKIP] No events found for {subject}, {experiment}, session {session}: {exc}")
+
+        # ---------- Behavioral ----------
+        if self._should_run('behavioral'):
+            try:
+                self.events = self.load_events(beh_only=True)
+            except FileNotFoundError as exc:
+                self._mark_stage('behavioral', 'failed', exc)
+                print(f"[SKIP] No events found for {subject}, {experiment}, session {session}: {exc}")
+                return
+            try:
+                self.make_event_descriptors()
+                self.write_bids_beh(overwrite=overwrite_beh)
+                self._mark_stage('behavioral', 'ok')
+            except Exception as exc:
+                self._mark_stage('behavioral', 'failed', exc)
+                print(f"[WARN] Behavioral conversion failed for "
+                      f"{self.subject}, {self.experiment}, session {self.session}: {exc}")
+                return
+        else:
+            self._mark_stage('behavioral', 'skipped')
+
+        # ---------- Common EEG load (needed by both eeg + montage stages) ----------
+        run_eeg = self._should_run('eeg')
+        run_montage = self._should_run('montage')
+        if not (run_eeg or run_montage):
+            self._mark_stage('eeg', 'skipped')
+            self._mark_stage('montage', 'skipped')
             return
-        try:
-            self.make_event_descriptors()
-            self.write_bids_beh(overwrite=overwrite_beh)
-            self._mark_stage('behavioral', 'ok')
-        except Exception as exc:
-            self._mark_stage('behavioral', 'failed', exc)
-            print(f"[WARN] Behavioral conversion failed for "
-                  f"{self.subject}, {self.experiment}, session {self.session}: {exc}")
-            return
+
         try:
             self.raw_filepath = self.locate_raw_file()
             if self.raw_filepath.endswith(".bz2"):
@@ -177,23 +194,92 @@ class ScalpBIDSConverter:
             self.raw_file = self.load_scalp_eeg()
             self.set_montage()
             self.events = self.load_events()
-            # Temp EDF goes in the current user's home dir so the
-            # script works regardless of which user runs it (e.g.
-            # RAM_maint cannot write under /home1/zrentala/).
-            temp_dir = os.path.join(os.path.expanduser("~"), ".temp")
-            os.makedirs(temp_dir, exist_ok=True)
-            temp_edf = os.path.join(
-                temp_dir, f"{int(time.time() * 100)}_{os.getpid()}_temp.edf"
-            )
-            self.write_bids_eeg(temp_path=temp_edf, overwrite=overwrite_eeg)
-            self._mark_stage('eeg', 'ok')
         except Exception as exc:
+            # Both downstream stages depend on the source EEG; fail them together.
             self._mark_stage('eeg', 'failed', exc)
-            msg = (
-                f"[WARN] EEG conversion failed for "
-                f"{self.subject}, {self.experiment}, session {self.session}: {exc}"
-            )
-            print(msg)
+            self._mark_stage('montage', 'failed', exc)
+            print(f"[WARN] EEG load failed for "
+                  f"{self.subject}, {self.experiment}, session {self.session}: {exc}")
+            return
+
+        # ---------- EEG (re-encode + mne_bids writes everything) ----------
+        if run_eeg:
+            try:
+                # Temp EDF goes in the current user's home dir so the
+                # script works regardless of which user runs it (e.g.
+                # RAM_maint cannot write under /home1/zrentala/).
+                temp_dir = os.path.join(os.path.expanduser("~"), ".temp")
+                os.makedirs(temp_dir, exist_ok=True)
+                temp_edf = os.path.join(
+                    temp_dir, f"{int(time.time() * 100)}_{os.getpid()}_temp.edf"
+                )
+                self.write_bids_eeg(temp_path=temp_edf, overwrite=overwrite_eeg)
+                self._mark_stage('eeg', 'ok')
+            except Exception as exc:
+                self._mark_stage('eeg', 'failed', exc)
+                print(f"[WARN] EEG conversion failed for "
+                      f"{self.subject}, {self.experiment}, session {self.session}: {exc}")
+        else:
+            self._mark_stage('eeg', 'skipped')
+
+        # ---------- Montage (channels.tsv + electrodes.tsv only) ----------
+        if run_montage:
+            try:
+                self.write_bids_montage(overwrite=True)
+                self._mark_stage('montage', 'ok')
+            except Exception as exc:
+                self._mark_stage('montage', 'failed', exc)
+                print(f"[WARN] Montage write failed for "
+                      f"{self.subject}, {self.experiment}, session {self.session}: {exc}")
+        else:
+            self._mark_stage('montage', 'skipped')
+
+    # ------------------------------------------------------------------
+    # Stage gating helpers (mirror intracranial converter pattern)
+    # ------------------------------------------------------------------
+    def _bids_prefix(self):
+        task = self.experiment.lower()
+        return f'sub-{self.subject}_ses-{self.session}_task-{task}'
+
+    def _session_eeg_dir(self):
+        return os.path.join(self.root, f'sub-{self.subject}',
+                            f'ses-{self.session}', 'eeg')
+
+    def _session_beh_dir(self):
+        return os.path.join(self.root, f'sub-{self.subject}',
+                            f'ses-{self.session}', 'beh')
+
+    def _stage_outputs_exist(self, stage):
+        """True iff every expected file for `stage` already exists on disk."""
+        prefix = self._bids_prefix()
+        eeg_dir = self._session_eeg_dir()
+        beh_dir = self._session_beh_dir()
+
+        if stage == 'behavioral':
+            # Behavioral lives under either beh/ (no EEG) or eeg/ (events.tsv).
+            return any(os.path.exists(p) for p in (
+                os.path.join(beh_dir, f'{prefix}_beh.tsv'),
+                os.path.join(eeg_dir, f'{prefix}_events.tsv'),
+            ))
+        if stage == 'eeg':
+            data_ok = any(os.path.exists(os.path.join(eeg_dir, f'{prefix}_eeg{ext}'))
+                          for ext in ('.edf', '.bdf'))
+            json_ok = os.path.exists(os.path.join(eeg_dir, f'{prefix}_eeg.json'))
+            return data_ok and json_ok
+        if stage == 'montage':
+            channels_ok = os.path.exists(os.path.join(eeg_dir, f'{prefix}_channels.tsv'))
+            # space-* prefix on the electrodes file: any matching tsv satisfies.
+            sub_ses_prefix = f'sub-{self.subject}_ses-{self.session}'
+            electrodes_ok = bool(glob(os.path.join(
+                eeg_dir, f'{sub_ses_prefix}_space-*_electrodes.tsv'
+            )))
+            return channels_ok and electrodes_ok
+        raise ValueError(f"unknown stage: {stage!r}")
+
+    def _should_run(self, stage):
+        if self.overrides.get(stage, False):
+            return True
+        return not self._stage_outputs_exist(stage)
 
     
     def locate_raw_file(self):
@@ -616,15 +702,34 @@ class ScalpBIDSConverter:
         try:
             if self.file_type != ".bdf":
                 try:
-                    mne.export.export_raw(temp_path, self.raw_file, add_ch_type=True)
+                    # EGI .raw / .mff carries stim/sync digital channels
+                    # (sync, D255, DIN1, ...) that EDF can't represent
+                    # cleanly. Drop them before exporting so the on-disk
+                    # EDF and channels.tsv carry the same EEG+EOG set.
+                    raw_for_export = self.raw_file.copy().pick(['eeg', 'eog'])
+                    mne.export.export_raw(temp_path, raw_for_export, add_ch_type=False)
                     print("temp file created")
                 except FileExistsError as e:
                     print(e)
                 edf_file = mne.io.read_raw_edf(temp_path, preload=False, infer_types=True)
-                edf_file.set_montage(self.montage)
+                # add_ch_type=False above means the EDF carries no per-
+                # channel type metadata, so infer_types defaulted every
+                # channel to 'eeg'. Copy the type assignments from the
+                # source raw (where set_montage already classified EOG
+                # / misc / stim) so set_montage and downstream
+                # channels.tsv keep the correct types.
+                src_types = dict(zip(self.raw_file.ch_names,
+                                     self.raw_file.get_channel_types()))
+                type_overrides = {
+                    ch: src_types[ch]
+                    for ch in edf_file.ch_names
+                    if ch in src_types and src_types[ch] != 'eeg'
+                }
+                if type_overrides:
+                    edf_file.set_channel_types(type_overrides)
+                edf_file.set_montage(self.montage, on_missing='warn')
                 mne_bids.write_raw_bids(
                     edf_file,
-                     events_data=None,
                     bids_path=bids_path,
                     overwrite=overwrite
                 )
@@ -645,3 +750,47 @@ class ScalpBIDSConverter:
             json.dump(fp=f, obj = self.events_descriptor)
         mne_bids.update_sidecar_json(bids_path.update(suffix="eeg", extension=".json"),
                                      self.eeg_sidecar, verbose=True)
+
+    def write_bids_montage(self, overwrite=True):
+        """Write only ``*_channels.tsv``, ``*_electrodes.tsv`` and
+        ``*_coordsystem.json`` for this session — without re-encoding the
+        EEG. Mirrors the intracranial converter's
+        ``write_BIDS_channels`` / ``write_BIDS_electrodes`` flow so that
+        a `--override-montage` rerun can fix sidecar files in place.
+
+        Note: the on-disk EDF must already match the source recording's
+        bare channel names (i.e. it must have been written with the
+        ``add_ch_type=False`` fix). Older EDFs from the buggy converter
+        carry ``"EEG E1"`` etc.; running this method against those will
+        produce a bare-name channels.tsv that no longer matches the EDF.
+        Pair with ``--override-eeg`` for affected sessions.
+        """
+        from mne_bids.write import _channels_tsv, _write_dig_bids
+
+        task_name = self.experiment.lower()
+        bids_path = mne_bids.BIDSPath(
+            subject=self.subject, session=str(self.session),
+            task=task_name, datatype="eeg", root=self.root,
+        )
+        os.makedirs(bids_path.directory, exist_ok=True)
+
+        # For EGI (.raw / .mff) inputs the eeg stage round-trips through
+        # mne.export.export_raw → EDF, which drops stim/sync channels
+        # (EDF can't represent them). The resulting on-disk EDF and
+        # channels.tsv contain only EEG + EOG. Pick the same subset here
+        # so our channels.tsv matches the EDF content exactly. BDF
+        # inputs are copied straight through write_raw_bids, so all
+        # source channels (EEG + EOG + MISC + TRIG) land on disk and
+        # we use the raw as-is.
+        if self.file_type == ".bdf":
+            raw_for_tsv = self.raw_file
+        else:
+            raw_for_tsv = self.raw_file.copy().pick(['eeg', 'eog'])
+
+        channels_path = bids_path.copy().update(
+            suffix="channels", extension=".tsv",
+        )
+        _channels_tsv(raw_for_tsv, channels_path.fpath,
+                      convert_fmt=None, overwrite=overwrite)
+        _write_dig_bids(bids_path, raw_for_tsv,
+                        montage=self.montage, overwrite=overwrite)

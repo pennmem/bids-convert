@@ -60,17 +60,33 @@ def bids_session_outputs_exist(root, subject, experiment, session):
         os.path.join(sess_dir, "eeg", f"{sub}_{ses}_task-{task}_events.json"),
         os.path.join(sess_dir, "eeg", f"{sub}_{ses}_task-{task}_events.tsv"),
     ]
-    return any(os.path.exists(p) for p in candidates)
+    if any(os.path.exists(p) for p in candidates):
+        return True
+    # Also count any space-*_electrodes.tsv (montage stage output) so a
+    # session that has electrodes but is missing channels.tsv still
+    # registers as "started" — keeping --override-montage from
+    # short-circuiting at the session level.
+    eeg_dir = os.path.join(sess_dir, "eeg")
+    if os.path.isdir(eeg_dir):
+        for fn in os.listdir(eeg_dir):
+            if fn.endswith("_electrodes.tsv") and fn.startswith(f"{sub}_{ses}_"):
+                return True
+    return False
 
 
-def convert_to_bids(subject, experiment, session, root, overwrite_eeg, overwrite_beh, skip_if_exists):
+def convert_to_bids(subject, experiment, session, root, overwrite_eeg, overwrite_beh,
+                    skip_if_exists, overrides=None):
     """
     Worker function. Returns a result dict with job outcome so the caller can
     update the per-task conversion error CSV. If skip_if_exists is True and
     outputs exist, returns a skip result with status='skip_existing' and the
     caller does not touch the CSV (so prior error rows, if any, are preserved).
     """
-    if skip_if_exists and bids_session_outputs_exist(root, subject, experiment, session):
+    overrides = overrides or {}
+    # If any --override-<stage> was passed, never short-circuit at the
+    # session level; the converter's per-stage _should_run handles it.
+    if skip_if_exists and not any(overrides.values()) \
+            and bids_session_outputs_exist(root, subject, experiment, session):
         return {
             'status': 'skip_existing',
             'subject': str(subject),
@@ -87,6 +103,7 @@ def convert_to_bids(subject, experiment, session, root, overwrite_eeg, overwrite
         root=root,
         overwrite_eeg=overwrite_eeg,
         overwrite_beh=overwrite_beh,
+        overrides=overrides,
     )
     report = converter.stage_report()
     exc = report['exception']
@@ -182,6 +199,18 @@ def parse_args():
         help="Overwrite behavioral outputs even if they already exist",
     )
 
+    # Per-stage override flags. Default: each stage runs only when its
+    # outputs are missing on disk. Pass --override-<stage> to force a
+    # re-run regardless of existing files. Mirrors the intracranial
+    # converter's CLI (see intracranial/run_intracranial_converter.py).
+    for stage in ScalpBIDSConverter.ALL_STAGES:
+        parser.add_argument(
+            f"--override-{stage}",
+            action="store_true",
+            default=False,
+            help=f"Force re-conversion of the '{stage}' stage even if outputs exist.",
+        )
+
     return parser.parse_args()
 
 
@@ -193,8 +222,18 @@ if __name__ == "__main__":
     max_subjects = args.max_subjects
     root = args.root
 
+    # Build the per-stage overrides dict from --override-<stage> flags.
+    # argparse converts hyphens to underscores in the attribute name.
+    overrides = {
+        stage: getattr(args, f"override_{stage}")
+        for stage in ScalpBIDSConverter.ALL_STAGES
+    }
+
     # Skip if exists unless user explicitly asked to overwrite something
-    skip_if_exists = not (args.overwrite_eeg or args.overwrite_beh)
+    # (legacy --overwrite-* flags) or override a stage.
+    skip_if_exists = not (
+        args.overwrite_eeg or args.overwrite_beh or any(overrides.values())
+    )
 
     print("\nRunning with settings:")
     print("Experiments:", experiments)
@@ -204,6 +243,7 @@ if __name__ == "__main__":
     print("Root:", root)
     print("Overwrite EEG:", args.overwrite_eeg)
     print("Overwrite BEH:", args.overwrite_beh)
+    print("Stage overrides:", {s: v for s, v in overrides.items() if v} or "(none)")
     print("Skip if exists:", skip_if_exists)
     print("--------------------------------------------------\n")
 
@@ -283,6 +323,7 @@ if __name__ == "__main__":
                     overwrite_eeg=args.overwrite_eeg,
                     overwrite_beh=args.overwrite_beh,
                     skip_if_exists=skip_if_exists,
+                    overrides=overrides,
                 )
                 _handle_result(result)
                 msg = result.get('message', '') if isinstance(result, dict) else str(result)
@@ -332,6 +373,7 @@ if __name__ == "__main__":
             overwrite_eeg=args.overwrite_eeg,
             overwrite_beh=args.overwrite_beh,
             skip_if_exists=skip_if_exists,
+            overrides=overrides,
         )
         future_to_job = dict(zip(futures, job_keys))
 
