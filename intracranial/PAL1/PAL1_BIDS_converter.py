@@ -40,10 +40,17 @@ class PAL1_BIDS_converter(intracranial_BIDS_converter):
             events.loc[events.trial_type=='REC_EVENT', 'response_time'] = events['RT'] / 1000.0     # recall events use RT [s]
         events['stim_file'] = np.where((events.trial_type.isin(['STUDY_PAIR', 'PROBE_START', 'TEST_PROBE']))
                                         & (events.list>0), self.wordpool_file, 'n/a')           # add wordpool to word events
-        events.loc[events.answer==-999, 'answer'] = 'n/a'                                       # non-math events no answer
-        
+        if 'answer' in events.columns:
+            events.loc[events.answer==-999, 'answer'] = 'n/a'                                   # non-math events no answer
+
         events = events.fillna('n/a')                    # change NaN to 'n/a'
         events = events.replace('', 'n/a')               # no empty cells
+
+        # Ensure all output columns exist (sessions missing math/recall events may lack some)
+        for col in ['serialpos', 'probepos', 'probe_word', 'resp_word', 'study_1', 'study_2',
+                    'list', 'test', 'answer']:
+            if col not in events.columns:
+                events[col] = 'n/a'
 
         events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file',
                          'serialpos', 'probepos', 'probe_word', 'resp_word', 'study_1', 'study_2',    # leave probepos and serialpos as is
