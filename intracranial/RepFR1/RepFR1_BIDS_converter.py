@@ -77,7 +77,7 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
         return events
 
     # assign recalled status to recall events
-    def apply_recall_status(events):
+    def apply_recall_status(self, events):
         recalled = []
         for _, l_evs in events.groupby('list', sort=False):      # preserve order
             w_evs = l_evs.query("type == 'WORD'")
