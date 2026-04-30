@@ -80,15 +80,15 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
     def apply_recall_status(self, events):
         recalled = []
         for _, l_evs in events.groupby('list', sort=False):      # preserve order
-            w_evs = l_evs.query("type == 'WORD'")
-            r_evs = l_evs.query("type == 'REC_WORD'")
-            
+            w_evs = l_evs.query("trial_type == 'WORD'")
+            r_evs = l_evs.query("trial_type == 'REC_WORD'")
+
             words = np.array(w_evs.item_name)
             recs = np.array(r_evs.item_name)
-            
+
             recalled.extend([1 if r in words else 0 for r in recs])
-            
-        events.loc[events['type'] == 'REC_WORD', 'recalled'] = recalled
+
+        events.loc[events['trial_type'] == 'REC_WORD', 'recalled'] = recalled
         return events
 
     def make_events_descriptor(self):
