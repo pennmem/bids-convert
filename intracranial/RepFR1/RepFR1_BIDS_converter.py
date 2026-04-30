@@ -42,7 +42,7 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV'),
                    'response_time'] = events['rectime'] / 1000.0
         events['stim_file'] = np.where(events.trial_type=='WORD', self.wordpool_file, 'n/a')         # add wordpool to word events
-        events = self.apply_recall_status(events)                                                    # add recalled status to recalls (all 0)
+        # events = self.apply_recall_status(events)                                                    # add recalled status to recalls (all 0)
         events = events.fillna('n/a')
         events = events.replace('', 'n/a')
         
@@ -77,19 +77,23 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
         return events
 
     # assign recalled status to recall events
-    def apply_recall_status(self, events):
-        recalled = []
-        for _, l_evs in events.groupby('list', sort=False):      # preserve order
-            w_evs = l_evs.query("trial_type == 'WORD'")
-            r_evs = l_evs.query("trial_type == 'REC_WORD'")
+    # def apply_recall_status(self, events):
+    #     recalled = []
+    #     for _, l_evs in events.groupby('list', sort=False):      # preserve order
+    #         w_evs = l_evs.query("trial_type == 'WORD'")
+    #         r_evs = l_evs.query("trial_type == 'REC_WORD'")
 
-            words = np.array(w_evs.item_name)
-            recs = np.array(r_evs.item_name)
+    #         words = np.array(w_evs.item_name)
+    #         recs = np.array(r_evs.item_name)
 
-            recalled.extend([1 if r in words else 0 for r in recs])
+    #         recalled.extend([1 if r in words else 0 for r in recs])
 
-        events.loc[events['trial_type'] == 'REC_WORD', 'recalled'] = recalled
-        return events
+    #     # cml `recalled` arrives as bool; cast to object so we can write
+    #     # 0/1 here (and 'n/a' downstream via fillna) without a pandas
+    #     # incompatible-dtype FutureWarning.
+    #     events['recalled'] = events['recalled'].astype(object)
+    #     events.loc[events['trial_type'] == 'REC_WORD', 'recalled'] = recalled
+    #     return events
 
     def make_events_descriptor(self):
         descriptions = {
