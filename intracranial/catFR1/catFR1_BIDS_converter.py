@@ -6,11 +6,14 @@ import re
 import json
 import os
 import mne_bids
+from pathlib import Path
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
+_HERE = Path(__file__).parent
+
 class catFR1_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_categorized_EN = np.loadtxt('catFR1/wordpools/wordpool_categorized_EN.txt', dtype=str)
-    wordpool_categorized_SP = np.loadtxt('catFR1/wordpools/wordpool_categorized_SP.txt', dtype=str)
+    wordpool_categorized_EN = np.loadtxt(_HERE / 'wordpools' / 'wordpool_categorized_EN.txt', dtype=str)
+    wordpool_categorized_SP = np.loadtxt(_HERE / 'wordpools' / 'wordpool_categorized_SP.txt', dtype=str)
 
     # initialize
     def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/catFR1/'):
@@ -32,7 +35,7 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
     
     def events_to_BIDS(self):
-        events = self.reader.load('events')
+        events = self._load_events()
         events = cml.correct_retrieval_offsets(events, self.reader)        # apply offset corrections
         events = cml.correct_countdown_lists(events, self.reader)          # apply countdown list corrections
         events = events.rename(columns={'eegoffset':'sample', 'type': 'trial_type'})               # rename columns

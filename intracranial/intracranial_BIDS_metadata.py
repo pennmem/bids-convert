@@ -12,6 +12,9 @@ import pickle
 from tqdm import tqdm
 import math
 import string
+from pathlib import Path
+
+_HERE = Path(__file__).parent
 
 # class to use when doing metadata checks before converting experiment to BIDS format
 class intracranial_BIDS_metadata:
@@ -166,7 +169,7 @@ class intracranial_BIDS_metadata:
     
     # query results from system_version_finder.py for NaN system versions
     def _determine_system_version(self, row):
-        sys_vers = pd.read_csv('system_versions.csv')
+        sys_vers = pd.read_csv(_HERE / 'system_versions.csv')
         sv = sys_vers[(sys_vers.subject == row.subject) & (sys_vers.experiment==row.experiment) & 
                       (sys_vers.session == row.session)]
         return sv.iloc[0].system_version
@@ -229,7 +232,7 @@ class intracranial_BIDS_metadata:
             return 10000000.0
         else:
             # read in from csv
-            sys1_units = pd.read_csv('system_1_unit_conversions.csv')
+            sys1_units = pd.read_csv(_HERE / 'system_1_unit_conversions.csv')
             return sys1_units[(sys1_units.subject == row.subject) &
                               (sys1_units.experiment == row.experiment) & 
                               (sys1_units.session == row.session)].iloc[0]['conversion_to_V']
@@ -240,7 +243,7 @@ class intracranial_BIDS_metadata:
     
     def _brain_regions(self, row):
         # read in from csv
-        region_data = pd.read_csv('bids_brain_regions.csv')
+        region_data = pd.read_csv(_HERE / 'bids_brain_regions.csv')
         regions = region_data[(region_data.subject==row.subject) & (region_data.experiment==row.experiment) & (region_data.session==row.session)]
         if len(regions) == 0:
             return dict(zip(self.BRAIN_REGIONS, np.zeros(len(self.BRAIN_REGIONS), dtype=int)))

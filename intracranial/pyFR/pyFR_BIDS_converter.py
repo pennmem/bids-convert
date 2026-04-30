@@ -7,11 +7,13 @@ import json
 import os
 import mne_bids
 import scipy
+from pathlib import Path
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
+_HERE = Path(__file__).parent
+
 class pyFR_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('pyFR/wordpools/wordpool_EN.txt', dtype=str)
-    # wordpool_EN = np.loadtxt('/home1/hherrema/BIDS/bids-convert/intracranial/pyFR/wordpools/wordpool_EN.txt', dtype=str)
+    wordpool_EN = np.loadtxt(_HERE / 'wordpools' / 'wordpool_EN.txt', dtype=str)
     CH_TYPES = {'TJ027': 'ECOG', 'TJ029': 'SEEG', 'TJ030': 'SEEG', 'TJ032': 'ECOG', 'TJ061': 'ECOG', 'TJ083':'ECOG',
                 'UP004': 'SEEG', 'UP008':'ECOG', 'UP011':'ECOG', 'UP037': 'ECOG'}
 
@@ -53,7 +55,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         return reader
 
     def reassign_session(self):
-        re_implants = pd.read_csv('pyFR/metadata/re_implants.csv')
+        re_implants = pd.read_csv(_HERE / 're_implants.csv')
         ri = re_implants[(re_implants.subject == self.subject) & (re_implants.montage == self.montage) &
                          (re_implants.session == self.session)]
         if len(ri) == 1:
@@ -73,7 +75,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
 
     def events_to_BIDS(self):
-        events = self.reader.load('events')     # cmlreaders now loads in math events automatically
+        events = self._load_events()     # cmlreaders now loads in math events automatically
 
         # transformations
         events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type'})                  # rename columns

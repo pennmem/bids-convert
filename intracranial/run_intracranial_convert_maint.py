@@ -10,6 +10,9 @@ from scipy.io import loadmat
 import cmldask.CMLDask as da
 from distributed.diagnostics.plugin import WorkerPlugin
 import os, sys, importlib
+from pathlib import Path
+
+_HERE = Path(__file__).parent
 
 # add the package ROOT, not the intracranial folder
 sys.path.insert(0, os.path.expanduser("~/bids-convert"))
@@ -115,7 +118,7 @@ if __name__ == "__main__":
         log_directory=log_dir,
     )
     client.register_worker_plugin(_BidsConvertPath())
-    conversion_df = pd.read_csv('system_1_unit_conversions.csv')
+    conversion_df = pd.read_csv(_HERE / 'system_1_unit_conversions.csv')
     df_jobs = df_subset[["subject", "experiment", "session", "system_version"]].copy()
 
     # Normalize dtypes (session often mismatches int vs str)

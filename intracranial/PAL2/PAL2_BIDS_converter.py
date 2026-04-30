@@ -6,11 +6,14 @@ import re
 import json
 import os
 import mne_bids
+from pathlib import Path
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
+_HERE = Path(__file__).parent
+
 class PAL2_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('PAL2/wordpools/wordpool_EN.txt', dtype=str)
-    wordpool_SP = np.loadtxt('PAL2/wordpools/wordpool_SP.txt', dtype=str)
+    wordpool_EN = np.loadtxt(_HERE / 'wordpools' / 'wordpool_EN.txt', dtype=str)
+    wordpool_SP = np.loadtxt(_HERE / 'wordpools' / 'wordpool_SP.txt', dtype=str)
     
     # initialize
     def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/PAL2/'):
@@ -30,7 +33,7 @@ class PAL2_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
     
     def events_to_BIDS(self):
-        events = self.reader.load('events')
+        events = self._load_events()
         events = self.unpack_stim_params(events)                        # convert stimulation parameters into columns
         events['n_pulses'] = events['n_pulses'].replace(250, 230)       # event creation wrongly assings n_pulses = 250
         events = self.assign_stim_lists(events)                         # assign stim_list values for math events

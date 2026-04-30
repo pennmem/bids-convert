@@ -7,10 +7,13 @@ import json
 import os
 import mne_bids
 import scipy.stats
+from pathlib import Path
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
+_HERE = Path(__file__).parent
+
 class YC2_BIDS_converter(intracranial_BIDS_converter):
-    wordpool = np.loadtxt('YC2/wordpools/wordpool.txt', dtype=str)
+    wordpool = np.loadtxt(_HERE / 'wordpools' / 'wordpool.txt', dtype=str)
 
     # initialize
     def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/YC2/'):
@@ -28,7 +31,7 @@ class YC2_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
     
     def events_to_BIDS(self):
-        events = self.reader.load('events')
+        events = self._load_events()
         events = self.unpack_stim_params(events)              # convert stimulation parameters into columns
         events = self.expand_travel_paths(events)             # expand events to have rows for travel paths
 

@@ -43,6 +43,7 @@ class intracranial_BIDS_converter:
     ELEC_TYPES_DESCRIPTION = {'S': 'strip', 'G': 'grid', 'D': 'depth', 'uD': 'micro'}
     ELEC_TYPES_BIDS = {'S': 'ECOG', 'G': 'ECOG', 'D': 'SEEG', 'uD': 'SEEG'}
     BRAIN_REGIONS = ['wb.region', 'ind.region', 'das.region', 'stein.region']
+    CATEGORY_KEYS = ('bad_channel', 'soz', 'interictal', 'brain_lesion')
 
     STAGES = ('behavioral', 'electrodes',
               'mono-eeg', 'bi-eeg',
@@ -108,7 +109,8 @@ class intracranial_BIDS_converter:
             return False
         if stage in ('mono-channels', 'bi-channels'):
             acq = 'monopolar' if stage == 'mono-channels' else 'bipolar'
-            return os.path.exists(os.path.join(ieeg_dir, f'{prefix}_acq-{acq}_channels.tsv'))
+            base = os.path.join(ieeg_dir, f'{prefix}_acq-{acq}_channels')
+            return os.path.exists(base + '.tsv') and os.path.exists(base + '.json')
         if stage in ('mono-eeg', 'bi-eeg'):
             acq = 'monopolar' if stage == 'mono-eeg' else 'bipolar'
             json_ok = os.path.exists(os.path.join(ieeg_dir, f'{prefix}_acq-{acq}_ieeg.json'))
@@ -132,9 +134,19 @@ class intracranial_BIDS_converter:
         return reader
     
     # ---------- Events ----------
+    def _load_events(self):
+        """Load cml events; for System-4 sessions, apply heartbeat-derived
+        correction to `mstime` before BIDS conversion. Subclass
+        events_to_BIDS() should call this in place of self.reader.load('events')."""
+        events = self.reader.load('events')
+        if getattr(self, 'system_version', None) == 4:
+            from .fix_heartbeats_sys4 import fix_heartbeats_for_session
+            events = fix_heartbeats_for_session(self.subject, self.experiment, self.session, events)
+        return events
+
     def set_wordpool(self):
         raise NotImplementedError       # override in subclass
-    
+
     def events_to_BIDS(self):
         raise NotImplementedError       # override in subclass
     
@@ -365,6 +377,23 @@ class intracranial_BIDS_converter:
 
         return sidecar
 
+    def make_channels_sidecar(self):
+        return {
+            'name': 'Label of the channel.',
+            'type': 'Type of channel (ECOG, SEEG, etc.).',
+            'units': 'Physical unit of the values represented in this channel.',
+            'low_cutoff': 'Frequencies used for the high-pass filter applied to the channel, in Hz.',
+            'high_cutoff': 'Frequencies used for the low-pass filter applied to the channel, in Hz.',
+            'reference': 'Specification of the reference (e.g. bipolar, CAR, intracranial). Bipolar channels.tsv only.',
+            'group': 'Group of channels this channel belongs to (same shank).',
+            'sampling_frequency': 'Sampling rate of the channel, in Hz.',
+            'description': 'Brief free-form description of the channel.',
+            'notch': 'Frequencies used for the notch filter applied to the channel, in Hz.',
+            'status': "Data quality observed on the channel ('good' or 'bad'). Set to 'bad' for channels not present in the recording or marked as bad_channel in electrode_categories.txt.",
+            'status_description': "Free-form description of the issue when status='bad' (e.g. 'not_in_recording', 'bad_channel').",
+            'category': "Lab-specific channel categorization derived from electrode_categories.txt. Comma-separated list of one or more of: bad_channel, soz (seizure onset zone), interictal (interictal spiking), brain_lesion. 'n/a' if none apply or if electrode_categories.txt was unavailable.",
+        }
+
     def _space_file(self, cml_space, suffix, extension):
         """Build `sub-X_ses-Y_task-Z_space-<label>_<suffix>.<ext>` directly,
         bypassing mne_bids.BIDSPath validation (which rejects non-standard
@@ -390,7 +419,28 @@ class intracranial_BIDS_converter:
     # ---------- Channels ----------
     def load_pairs(self):
         return self.reader.load('pairs')
-    
+
+    def _compute_category_column(self, labels, is_pair):
+        """Comma-separated lab category string per label, mirroring
+        cmlreaders.MontageReader._insert_categories: a pair is flagged if
+        either contact is in the category. Returns 'n/a' when no category
+        applies or when electrode_categories.txt was unavailable."""
+        cats = self.electrode_categories or {}
+        out = []
+        for lab in labels:
+            if is_pair:
+                try:
+                    a, b = lab.split('-')
+                except ValueError:
+                    out.append('n/a')
+                    continue
+                hit = [k for k in self.CATEGORY_KEYS
+                       if a in cats.get(k, []) or b in cats.get(k, [])]
+            else:
+                hit = [k for k in self.CATEGORY_KEYS if lab in cats.get(k, [])]
+            out.append(','.join(hit) if hit else 'n/a')
+        return out
+
     # convert CML pairs to BIDS channels (bipolar)
     def pairs_to_channels(self):
         labels = np.array(self.pairs.label)
@@ -408,6 +458,10 @@ class intracranial_BIDS_converter:
         channels['notch'] = 'n/a'
         channels['status'] = 'good'
         channels['status_description'] = 'n/a'
+        channels['category'] = self._compute_category_column(np.array(self.pairs.label), is_pair=True)
+        bad_mask = channels['category'].str.contains('bad_channel', na=False)
+        channels.loc[bad_mask, 'status'] = 'bad'
+        channels.loc[bad_mask, 'status_description'] = 'bad_channel'
 
         # Append dropped pairs (phantom contacts) with status = bad
         if hasattr(self, 'pairs_dropped') and len(self.pairs_dropped):
@@ -426,6 +480,7 @@ class intracranial_BIDS_converter:
                 'notch': 'n/a',
                 'status': 'bad',
                 'status_description': 'not_in_recording',
+                'category': 'n/a',
             })
             channels = pd.concat([channels, dropped_rows], ignore_index=True)
 
@@ -447,6 +502,10 @@ class intracranial_BIDS_converter:
         channels['notch'] = 'n/a'
         channels['status'] = 'good'
         channels['status_description'] = 'n/a'
+        channels['category'] = self._compute_category_column(np.array(self.contacts.label), is_pair=False)
+        bad_mask = channels['category'].str.contains('bad_channel', na=False)
+        channels.loc[bad_mask, 'status'] = 'bad'
+        channels.loc[bad_mask, 'status_description'] = 'bad_channel'
 
         # Append phantom contacts (in wiring doc but not in recording) as
         # status = bad so every contact is documented in channels.tsv.
@@ -463,6 +522,7 @@ class intracranial_BIDS_converter:
                 'notch': 'n/a',
                 'status': 'bad',
                 'status_description': 'not_in_recording',
+                'category': 'n/a',
             })
             channels = pd.concat([channels, dropped_rows], ignore_index=True)
 
@@ -527,10 +587,16 @@ class intracranial_BIDS_converter:
 
         if ref == 'bipolar':
             bids_path.update(acquisition='bipolar')
-            self._to_tsv(self.channels_bi, bids_path.fpath)
+            df = self.channels_bi
         elif ref == 'monopolar':
             bids_path.update(acquisition='monopolar')
-            self._to_tsv(self.channels_mono, bids_path.fpath)
+            df = self.channels_mono
+        else:
+            raise ValueError(f"unknown ref: {ref!r}")
+
+        self._to_tsv(df, bids_path.fpath)
+        with open(bids_path.update(extension='.json').fpath, 'w') as f:
+            json.dump(fp=f, obj=self.make_channels_sidecar(), indent=2)
 
     # ---------- EEG ----------
     # set sfreq and recording_duration attributes
@@ -993,6 +1059,13 @@ class intracranial_BIDS_converter:
 
         if needs_eeg_meta:
             self.sfreq, self.recording_duration = self.eeg_metadata()
+
+        self.electrode_categories = None
+        if run_mono_channels or run_bi_channels:
+            try:
+                self.electrode_categories = self.reader.load('electrode_categories')
+            except Exception as e:
+                print(f"WARNING: electrode_categories unavailable for {self.subject}/{self.experiment}/ses-{self.session} — `category` column will be n/a ({type(e).__name__}: {e})")
 
         contacts_loaded = False
         if needs_contacts:

@@ -6,11 +6,14 @@ import re
 import json
 import os
 import mne_bids
+from pathlib import Path
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
+_HERE = Path(__file__).parent
+
 class PAL1_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('PAL1/wordpools/wordpool_EN.txt', dtype=str)
-    wordpool_SP = np.loadtxt('PAL1/wordpools/wordpool_SP.txt', dtype=str)
+    wordpool_EN = np.loadtxt(_HERE / 'wordpools' / 'wordpool_EN.txt', dtype=str)
+    wordpool_SP = np.loadtxt(_HERE / 'wordpools' / 'wordpool_SP.txt', dtype=str)
 
     # initialize
     def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/PAL1/'):
@@ -27,7 +30,7 @@ class PAL1_BIDS_converter(intracranial_BIDS_converter):
     
     def events_to_BIDS(self):
         ### I THINK THIS NEEDS MORE WORK, OR AT LEAST TESTING
-        events = self.reader.load('events')
+        events = self._load_events()
         events = events.rename(columns={'eegoffset': 'sample', 'type': 'trial_type'})           # rename columns
         events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                      # onset from first event [s]
         events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0   # event duration [s] --> lots of superfluous events may mess this up
