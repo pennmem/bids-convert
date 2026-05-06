@@ -336,6 +336,11 @@ if __name__ == "__main__":
         valid = validate_bids(args, df_jobs, error_logs)
         sys.exit(0 if valid else 1)
 
+    # Track jobs whose conversion actually ran in this invocation. Skipped
+    # (already-existing) sessions and unhandled-exception jobs are excluded
+    # from the validation set.
+    converted_rows: list[dict] = []
+
     def _handle_result(result):
         if not isinstance(result, dict):
             return
@@ -390,6 +395,12 @@ if __name__ == "__main__":
                     print(f"✗ {msg}")
                 else:
                     print(f"✓ {msg}")
+                if isinstance(result, dict) and result.get('status') == 'ran':
+                    converted_rows.append({
+                        'subject': result['subject'],
+                        'experiment': result['experiment'],
+                        'session': int(result['session']),
+                    })
             except Exception as e:
                 print(f"✗ FAILED: {subject} {experiment} {session}")
                 print(e)
@@ -445,6 +456,12 @@ if __name__ == "__main__":
                     print(f"✗ {msg}")
                 else:
                     print(f"✓ {msg}")
+                if isinstance(result, dict) and result.get('status') == 'ran':
+                    converted_rows.append({
+                        'subject': result['subject'],
+                        'experiment': result['experiment'],
+                        'session': int(result['session']),
+                    })
             except Exception as e:
                 print("✗ failed:", future.key)
                 print(e)
@@ -456,4 +473,7 @@ if __name__ == "__main__":
         log.flush()
 
     if args.validate:
-        validate_bids(args, df_jobs, error_logs)
+        df_validate = pd.DataFrame(
+            converted_rows, columns=['subject', 'experiment', 'session'],
+        )
+        validate_bids(args, df_validate, error_logs)

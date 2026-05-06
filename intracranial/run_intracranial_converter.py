@@ -455,6 +455,11 @@ examples:
         if log is not None:
             log.record_result(result)
 
+    # Track jobs whose conversion actually ran in this invocation (i.e.
+    # produced a result back from convert_one_job and didn't trip an
+    # orchestrator-level exception). Only these are validated.
+    converted_rows: list[dict] = []
+
     # ---- SERIAL ----
     if args.serial:
         n_ok = 0
@@ -485,6 +490,12 @@ examples:
                 else:
                     n_ok += 1
                     print("✓ finished")
+                if not result.get('raised'):
+                    converted_rows.append({
+                        'subject': result['subject'],
+                        'experiment': result['experiment'],
+                        'session': int(result['session']),
+                    })
             except Exception:
                 import traceback
                 n_fail += 1
@@ -496,7 +507,10 @@ examples:
 
         print(f"\nDone. ok={n_ok} fail={n_fail}")
         if args.validate:
-            valid = validate_bids(args, df_jobs, error_logs)
+            df_validate = pd.DataFrame(
+                converted_rows, columns=['subject', 'experiment', 'session'],
+            )
+            valid = validate_bids(args, df_validate, error_logs)
             sys.exit(0 if n_fail == 0 and valid else 1)
         sys.exit(0 if n_fail == 0 else 1)
 
@@ -540,6 +554,12 @@ examples:
             else:
                 n_ok += 1
                 print("✓ finished:", fut.key)
+            if not result.get('raised'):
+                converted_rows.append({
+                    'subject': result['subject'],
+                    'experiment': result['experiment'],
+                    'session': int(result['session']),
+                })
         except Exception as e:
             n_fail += 1
             print("✗ failed:", fut.key)
@@ -550,7 +570,10 @@ examples:
 
     print(f"Done. ok={n_ok} fail={n_fail}")
     if args.validate:
-        valid = validate_bids(args, df_jobs, error_logs)
+        df_validate = pd.DataFrame(
+            converted_rows, columns=['subject', 'experiment', 'session'],
+        )
+        valid = validate_bids(args, df_validate, error_logs)
         sys.exit(0 if n_fail == 0 and valid else 1)
     sys.exit(0 if n_fail == 0 else 1)
 
