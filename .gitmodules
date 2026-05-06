@@ -1,0 +1,3 @@
+[submodule "eeg-validation"]
+	path = eeg-validation
+	url = git@github.com:pennmem/eeg-validation.git

@@ -137,11 +137,26 @@ class intracranial_BIDS_converter:
     def _load_events(self):
         """Load cml events; for System-4 sessions, apply heartbeat-derived
         correction to `mstime` before BIDS conversion. Subclass
-        events_to_BIDS() should call this in place of self.reader.load('events')."""
+        events_to_BIDS() should call this in place of self.reader.load('events').
+
+        Records the heartbeat correction outcome on ``self.heartbeat_status``
+        and emits one ``HEARTBEAT:`` line per session so the per-session log
+        always shows whether correction was applied, skipped, or failed.
+        """
         events = self.reader.load('events')
-        if getattr(self, 'system_version', None) == 4:
+        sv = getattr(self, 'system_version', None)
+        if sv == 4:
             from .fix_heartbeats_sys4 import fix_heartbeats_for_session
-            events = fix_heartbeats_for_session(self.subject, self.experiment, self.session, events)
+            events, hb_status = fix_heartbeats_for_session(
+                self.subject, self.experiment, self.session, events,
+            )
+        else:
+            hb_status = {
+                "applied": False,
+                "status": f"skipped (system_version={sv})",
+            }
+        self.heartbeat_status = hb_status
+        print(f"HEARTBEAT: {hb_status['status']}")
         return events
 
     def set_wordpool(self):

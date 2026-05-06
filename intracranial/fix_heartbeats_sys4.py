@@ -277,8 +277,17 @@ def fix_heartbeats_for_session(subject, experiment, session, events, verbose=Fal
         print(f"HEARTBEAT FIX: applied slope={slope:.9f} to eegoffset, "
               f"slope+offset={offset:.3f} ms to mstime "
               f"for {subject}/{experiment}/ses-{session}")
-        return corrected
+        return corrected, {
+            "applied": True,
+            "status": "applied",
+            "slope": float(slope),
+            "offset": float(offset),
+        }
     except Exception as e:
+        reason = f"{type(e).__name__}: {e}"
         print(f"WARNING: heartbeat fix failed for {subject}/{experiment}/ses-{session} "
-              f"— leaving mstime uncorrected ({type(e).__name__}: {e})")
-        return events
+              f"— leaving mstime uncorrected ({reason})")
+        return events, {
+            "applied": False,
+            "status": f"failed: {reason}",
+        }

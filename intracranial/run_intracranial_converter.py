@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import os
-import subprocess
 import sys
 import importlib
 import importlib.util
@@ -15,6 +14,16 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from intracranial.intracranial_BIDS_converter import intracranial_BIDS_converter
 from conversion_error_log import ConversionErrorLog, cmlreader_involved
+from bids_validation import (
+    run_bids_validator,
+    session_log_dir,
+    session_tag,
+    tee_to_file,
+    validate_jobs,
+    write_session_heartbeat_status,
+)
+sys.path.append("/home1/zrentala/bidsreader")
+from bidsreader import CMLBIDSReader
 
 # Converters are imported lazily (on first use) so that class-level operations
 # in each converter (e.g. loading wordpool files) only run when needed.
@@ -162,6 +171,7 @@ def convert_one_job(
         error_type = ""
         error_message = ""
         cml = False
+    hb_status = getattr(converter, 'heartbeat_status', None)
     return {
         'subject': str(subject),
         'experiment': experiment,
@@ -174,6 +184,8 @@ def convert_one_job(
         'error_message': error_message,
         'cmlreader_failure': cml,
         'raised': exc is not None,
+        'heartbeat_status': (hb_status or {}).get('status', 'unknown'),
+        'heartbeat_applied': bool((hb_status or {}).get('applied', False)),
     }
 
 
@@ -271,91 +283,42 @@ def run_job(
     p = os.path.expanduser("~/bids-convert")
     if p not in sys.path:
         sys.path.insert(0, p)
-    return convert_one_job(
-        subject, experiment, int(session), float(system_version), float(unit_scale),
-        brain_regions=brain_regions,
-        root=root,
-        overrides=overrides,
+    from bids_validation import (
+        session_log_dir, session_tag, tee_to_file, write_session_heartbeat_status,
     )
-
-
-def validate_bids_output(root: str):
-    """
-    Validate a BIDS dataset at `root`.
-
-    Two-layer approach:
-      1. Python path validation (bids_validator): checks every file's name and
-         path against BIDS naming conventions.  Always available.
-      2. Full CLI validation (bids-validator npm tool): checks file contents,
-         required metadata fields, and sidecar completeness.  Only runs when
-         the CLI is on PATH.
-
-    Returns True if no errors were found, False otherwise.
-    """
-    print(f"\n{'='*60}")
-    print(f"BIDS Validation: {root}")
-    print(f"{'='*60}")
-
-    any_errors = False
-
-    # --- Layer 1: Python path/naming validation ---
-    try:
-        from bids_validator import BIDSValidator
-        validator = BIDSValidator()
-        naming_errors = []
-        for dirpath, _, files in os.walk(root):
-            for fname in files:
-                full = os.path.join(dirpath, fname)
-                rel = "/" + os.path.relpath(full, root)
-                if not validator.is_bids(rel):
-                    naming_errors.append(rel)
-
-        if naming_errors:
-            print(f"\n[Path validation] {len(naming_errors)} file(s) with non-BIDS-compliant names:")
-            for p in sorted(naming_errors):
-                print(f"  ✗ {p}")
-            any_errors = True
-        else:
-            print(f"\n[Path validation] All file names are BIDS-compliant. ✓")
-
-    except ImportError:
-        print("[Path validation] bids_validator not installed — skipping. (pip install bids_validator)")
-
-    # --- Layer 2: Full CLI validation (npm bids-validator) ---
-    # Prefer direct invocation; fall back to npx (local npm install).
-    if subprocess.run(["which", "bids-validator"], capture_output=True).returncode == 0:
-        cmd = ["bids-validator", root, "--verbose"]
-    elif subprocess.run(["which", "npx"], capture_output=True).returncode == 0:
-        cmd = ["npx", "bids-validator", root, "--verbose"]
-    else:
-        cmd = None
-
-    if cmd is not None:
-        print(f"\n[Full validation] Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        print(result.stdout)
-        if result.returncode != 0:
-            # Distinguish a validator crash (e.g. Node.js too old) from actual BIDS errors.
-            if "SyntaxError" in result.stderr or "SyntaxError" in result.stdout:
-                print(
-                    f"WARNING: bids-validator failed to start (likely Node.js version too old).\n"
-                    f"  Run manually in your shell: {' '.join(cmd)}\n"
-                    f"  stderr: {result.stderr.strip()}"
-                )
-            else:
-                print(result.stderr)
-                any_errors = True
-    else:
-        print(
-            "\n[Full validation] bids-validator not found — skipping content/metadata checks.\n"
-            "  Install via:  npm install -g bids-validator\n"
-            "  Or run via Docker:\n"
-            f"    docker run --rm -v {root}:/data:ro bids/validator /data"
+    log_dir = session_log_dir(experiment, subject, int(session))
+    tag = session_tag(subject, experiment, int(session))
+    log_path = os.path.join(log_dir, f"{tag}_bids_convert_log.txt")
+    with tee_to_file(log_path, mode="w"):
+        result = convert_one_job(
+            subject, experiment, int(session), float(system_version), float(unit_scale),
+            brain_regions=brain_regions,
+            root=root,
+            overrides=overrides,
         )
+    write_session_heartbeat_status(log_dir, tag, result)
+    return result
 
-    print(f"\nValidation {'PASSED ✓' if not any_errors else 'FAILED ✗'}")
-    print(f"{'='*60}\n")
-    return not any_errors
+def _run_convert_with_tee(subject, experiment, session, **kwargs):
+    """Run convert_one_job while teeing its stdout/stderr into a per-session log."""
+    log_dir = session_log_dir(experiment, subject, int(session))
+    tag = session_tag(subject, experiment, int(session))
+    log_path = os.path.join(log_dir, f"{tag}_bids_convert_log.txt")
+    with tee_to_file(log_path, mode="w"):
+        result = convert_one_job(subject, experiment, int(session), **kwargs)
+    write_session_heartbeat_status(log_dir, tag, result)
+    return result
+
+
+def validate_bids(args, df_jobs, error_logs):
+    """Run per-session eeg-validation pipelines, then dataset-wide BIDS Validator."""
+    return validate_jobs(
+        df_jobs,
+        bids_root_for_job=lambda row: args.root,
+        error_logs=error_logs,
+        intracranial=True,
+        log_root_per_experiment=False,
+    )
 
 
 def main():
@@ -434,7 +397,23 @@ examples:
         ap.error("--sessions requires at least --subjects or --experiments to be specified.")
 
     if args.validate_only:
-        valid = validate_bids_output(args.root)
+        # Build the same job set that conversion would have iterated over,
+        # so per-session pipelines can run before the dataset-wide validator.
+        conversion_df = pd.read_csv(args.conversion_csv)
+        conversion_df["session"] = conversion_df["session"].astype(int)
+        max_subjects = 1 if args.smokescreen else args.max_subjects
+        df_jobs = build_jobs(
+            subjects=args.subjects,
+            experiments=args.experiments,
+            sessions_spec=args.sessions,
+            max_subjects=max_subjects,
+            subjects_to_exclude=set(args.exclude_subjects or []),
+            conversion_df=conversion_df,
+        )
+        error_logs: dict[str, ConversionErrorLog] = {}
+        for exp in df_jobs["experiment"].unique():
+            error_logs[exp] = ConversionErrorLog(args.root, exp)
+        valid = validate_bids(args, df_jobs, error_logs)
         sys.exit(0 if valid else 1)
 
     conversion_df = pd.read_csv(args.conversion_csv)
@@ -492,8 +471,9 @@ examples:
             print(f"\n[{i+1}/{len(df_jobs)}] {subj} {exp} ses-{sess} (sv={sv}, unit_scale={us})")
 
             try:
-                result = convert_one_job(
-                    subj, exp, sess, sv, us,
+                result = _run_convert_with_tee(
+                    subj, exp, sess,
+                    system_version=sv, unit_scale=us,
                     brain_regions=brain_regions,
                     root=args.root,
                     overrides=overrides,
@@ -516,7 +496,7 @@ examples:
 
         print(f"\nDone. ok={n_ok} fail={n_fail}")
         if args.validate:
-            valid = validate_bids_output(args.root)
+            valid = validate_bids(args, df_jobs, error_logs)
             sys.exit(0 if n_fail == 0 and valid else 1)
         sys.exit(0 if n_fail == 0 else 1)
 
@@ -570,7 +550,7 @@ examples:
 
     print(f"Done. ok={n_ok} fail={n_fail}")
     if args.validate:
-        valid = validate_bids_output(args.root)
+        valid = validate_bids(args, df_jobs, error_logs)
         sys.exit(0 if n_fail == 0 and valid else 1)
     sys.exit(0 if n_fail == 0 else 1)
 

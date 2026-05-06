@@ -22,6 +22,12 @@ class _BidsConvertPath(WorkerPlugin):
 
 sys.path.insert(0, os.path.expanduser("~/bids-convert"))
 from conversion_error_log import ConversionErrorLog, cmlreader_involved
+from bids_validation import (
+    session_log_dir,
+    session_tag,
+    tee_to_file,
+    validate_jobs,
+)
 
 pd.options.display.max_columns = None
 pd.options.display.max_rows = 200
@@ -82,6 +88,26 @@ def convert_to_bids(subject, experiment, session, root, overwrite_eeg, overwrite
     outputs exist, returns a skip result with status='skip_existing' and the
     caller does not touch the CSV (so prior error rows, if any, are preserved).
     """
+    # Make ~/bids-convert importable on the worker (Dask plugin handles current
+    # workers; this guards against adaptive new ones not yet caught by setup()).
+    import sys as _sys, os as _os
+    _p = _os.path.expanduser("~/bids-convert")
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+    from bids_validation import session_log_dir, session_tag, tee_to_file
+
+    log_dir = session_log_dir(experiment, subject, int(session))
+    tag = session_tag(subject, experiment, int(session))
+    log_path = _os.path.join(log_dir, f"{tag}_bids_convert_log.txt")
+    with tee_to_file(log_path, mode="w"):
+        return _convert_to_bids_inner(
+            subject, experiment, session, root,
+            overwrite_eeg, overwrite_beh, skip_if_exists, overrides,
+        )
+
+
+def _convert_to_bids_inner(subject, experiment, session, root, overwrite_eeg,
+                           overwrite_beh, skip_if_exists, overrides):
     overrides = overrides or {}
     # If any --override-<stage> was passed, never short-circuit at the
     # session level; the converter's per-stage _should_run handles it.
@@ -133,6 +159,17 @@ def convert_to_bids(subject, experiment, session, root, overwrite_eeg, overwrite
     }
 
 
+def validate_bids(args, df_jobs, error_logs):
+    """Run per-session eeg-validation pipelines, then dataset-wide BIDS Validator."""
+    return validate_jobs(
+        df_jobs,
+        bids_root_for_job=lambda row: args.root + f"/{row['experiment']}/",
+        error_logs=error_logs,
+        intracranial=False,
+        log_root_per_experiment=True,
+    )
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Convert scalp EEG data to BIDS.")
 
@@ -176,6 +213,22 @@ def parse_args():
         action="store_true",
         default=False,
         help="Run sequentially (no Dask / Slurm)",
+    )
+
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        default=False,
+        help="Run BIDS validation (eeg-validation pipelines + BIDS Validator) "
+             "after conversion completes.",
+    )
+
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        default=False,
+        help="Skip conversion and only run BIDS validation on --root for the "
+             "selected jobs.",
     )
 
     parser.add_argument(
@@ -278,6 +331,10 @@ if __name__ == "__main__":
     for experiment in df_jobs["experiment"].unique():
         task_root = root + f"/{experiment}/"
         error_logs[experiment] = ConversionErrorLog(task_root, experiment)
+
+    if args.validate_only:
+        valid = validate_bids(args, df_jobs, error_logs)
+        sys.exit(0 if valid else 1)
 
     def _handle_result(result):
         if not isinstance(result, dict):
@@ -397,3 +454,6 @@ if __name__ == "__main__":
 
     for log in error_logs.values():
         log.flush()
+
+    if args.validate:
+        validate_bids(args, df_jobs, error_logs)
