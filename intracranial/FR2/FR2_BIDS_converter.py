@@ -6,15 +6,18 @@ import re
 import json
 import os
 import mne_bids
+from pathlib import Path
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
+_HERE = Path(__file__).parent
+
 class FR2_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('FR2/wordpools/wordpool_EN.txt', dtype=str)
-    wordpool_SP = np.loadtxt('FR2/wordpools/wordpool_SP.txt', dtype=str)
+    wordpool_EN = np.loadtxt(_HERE / 'wordpools' / 'wordpool_EN.txt', dtype=str)
+    wordpool_SP = np.loadtxt(_HERE / 'wordpools' / 'wordpool_SP.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/FR2'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+    def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/FR2'):
+        super().__init__(subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides, root)
 
     # ---------- Events ----------
     def set_wordpool(self):
@@ -30,7 +33,7 @@ class FR2_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
     
     def events_to_BIDS(self):
-        events = self.reader.load('events')
+        events = self._load_events()
         events = self.unpack_stim_params(events)             # convert stimulation parameters into columns
         events = self.assign_stim_lists(events)              # assign stim_list values for math events
 

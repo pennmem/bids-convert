@@ -7,14 +7,17 @@ import json
 import os
 import mne_bids
 import scipy.stats
+from pathlib import Path
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
+_HERE = Path(__file__).parent
+
 class YC1_BIDS_converter(intracranial_BIDS_converter):
-    wordpool = np.loadtxt('YC1/wordpools/wordpool.txt', dtype=str)
+    wordpool = np.loadtxt(_HERE / 'wordpools' / 'wordpool.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/YC1/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+    def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/YC1/'):
+        super().__init__(subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides, root)
 
     # ---------- Events ----------
     def set_wordpool(self):                 # all sessions same wordpool
@@ -28,7 +31,7 @@ class YC1_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
     
     def events_to_BIDS(self):
-        events = self.reader.load('events')
+        events = self._load_events()
         events = self.expand_travel_paths(events)                     # expand events to have rows for travel paths
 
         events = events.rename(columns={'eegoffset': 'sample', 'type': 'trial_type', 'block_num': 'trial', 'resp_travel_time': 'resp_total_time'})     # rename columns

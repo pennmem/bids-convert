@@ -4,13 +4,16 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
+from pathlib import Path
+
+_HERE = Path(__file__).parent
 
 class RepFR1_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('RepFR1/wordpools/wordpool_EN.txt', dtype=str)
-    wordpool_SP = np.loadtxt('RepFR1/wordpools/wordpool_SP.txt', dtype=str)
+    wordpool_EN = np.loadtxt(_HERE / 'wordpools' / 'wordpool_EN.txt', dtype=str)
+    wordpool_SP = np.loadtxt(_HERE / 'wordpools' / 'wordpool_SP.txt', dtype=str)
     
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/RepFR1/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+    def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/RepFR1/'):
+        super().__init__(subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides, root)
 
     # ---------- Events ----------
     def set_wordpool(self):
@@ -26,7 +29,7 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
     
     def events_to_BIDS(self):
-        events = self.reader.load('events')
+        events = self._load_events()
         events['type'] = events['type'].replace('session_start', 'SESS_START')                       # fix odd SESS_START event types
         events.loc[events['type'] == 'SESS_END', 'list'] = -999                                      # some SESS_END events get final list +1, just set all to default
         
@@ -39,7 +42,7 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV'),
                    'response_time'] = events['rectime'] / 1000.0
         events['stim_file'] = np.where(events.trial_type=='WORD', self.wordpool_file, 'n/a')         # add wordpool to word events
-        events = self.apply_recall_status(events)                                                    # add recalled status to recalls (all 0)
+        # events = self.apply_recall_status(events)                                                    # add recalled status to recalls (all 0)
         events = events.fillna('n/a')
         events = events.replace('', 'n/a')
         
@@ -51,7 +54,7 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
 
     def apply_event_durations(self, events):
         # word durations
-        wd_path = '/home1/hherrema/BIDS/RepFR1/metadata/word_durations.csv'             # update to a shared location
+        wd_path = _HERE / 'word_durations.csv'
         word_durations = pd.read_csv(wd_path)
         wd = word_durations[(word_durations.subject == self.subject) & (word_durations.session == self.session)].iloc[0].word_duration_rounded
         wd /= 1000                               # convert from ms to s
@@ -74,19 +77,23 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
         return events
 
     # assign recalled status to recall events
-    def apply_recall_status(events):
-        recalled = []
-        for _, l_evs in events.groupby('list', sort=False):      # preserve order
-            w_evs = l_evs.query("type == 'WORD'")
-            r_evs = l_evs.query("type == 'REC_WORD'")
-            
-            words = np.array(w_evs.item_name)
-            recs = np.array(r_evs.item_name)
-            
-            recalled.extend([1 if r in words else 0 for r in recs])
-            
-        events.loc[events['type'] == 'REC_WORD', 'recalled'] = recalled
-        return events
+    # def apply_recall_status(self, events):
+    #     recalled = []
+    #     for _, l_evs in events.groupby('list', sort=False):      # preserve order
+    #         w_evs = l_evs.query("trial_type == 'WORD'")
+    #         r_evs = l_evs.query("trial_type == 'REC_WORD'")
+
+    #         words = np.array(w_evs.item_name)
+    #         recs = np.array(r_evs.item_name)
+
+    #         recalled.extend([1 if r in words else 0 for r in recs])
+
+    #     # cml `recalled` arrives as bool; cast to object so we can write
+    #     # 0/1 here (and 'n/a' downstream via fillna) without a pandas
+    #     # incompatible-dtype FutureWarning.
+    #     events['recalled'] = events['recalled'].astype(object)
+    #     events.loc[events['trial_type'] == 'REC_WORD', 'recalled'] = recalled
+    #     return events
 
     def make_events_descriptor(self):
         descriptions = {

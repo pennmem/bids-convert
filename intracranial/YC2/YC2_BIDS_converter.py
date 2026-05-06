@@ -7,14 +7,17 @@ import json
 import os
 import mne_bids
 import scipy.stats
+from pathlib import Path
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
+_HERE = Path(__file__).parent
+
 class YC2_BIDS_converter(intracranial_BIDS_converter):
-    wordpool = np.loadtxt('YC2/wordpools/wordpool.txt', dtype=str)
+    wordpool = np.loadtxt(_HERE / 'wordpools' / 'wordpool.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/YC2/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+    def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/YC2/'):
+        super().__init__(subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides, root)
 
     # ---------- Events ----------
     def set_wordpool(self):
@@ -28,7 +31,7 @@ class YC2_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
     
     def events_to_BIDS(self):
-        events = self.reader.load('events')
+        events = self._load_events()
         events = self.unpack_stim_params(events)              # convert stimulation parameters into columns
         events = self.expand_travel_paths(events)             # expand events to have rows for travel paths
 
@@ -76,17 +79,40 @@ class YC2_BIDS_converter(intracranial_BIDS_converter):
     
     # unpack stimulation parameters from dictionary and add as columns to events dataframe
     def unpack_stim_params(self, events):
-        stim_params_df = pd.DataFrame()
+        stim_params_rows = []
         for _, row in events.iterrows():
-            stim_params = pd.DataFrame.from_dict(row.stim_params)   # dictionary already in list
-            
+            sp = row.stim_params
+            if isinstance(sp, list) and len(sp) > 0 and isinstance(sp[0], dict):
+                sp_dict = dict(sp[0])
+            elif isinstance(sp, dict):
+                sp_dict = dict(sp)
+            else:
+                sp_dict = {}
+
             # no stimulation on test trials
             if row['type'] in ["NAV_TEST", "NAV_PRACTICE_TEST"]:
-                stim_params['stim_on'] = False
+                sp_dict['stim_on'] = False
 
-            stim_params_df = pd.concat([stim_params_df, stim_params], ignore_index=True)
+            stim_params_rows.append(sp_dict)
 
-        return pd.concat([events, stim_params_df], axis=1)
+        stim_params_df = pd.DataFrame(stim_params_rows)
+
+        # Guarantee all columns that apply_data_to_path / events_to_BIDS read exist.
+        # stim_on must be a real bool (NaN would break astype(int) at events_to_BIDS L46).
+        # The numeric/string defaults are placeholders; the cleanup at events_to_BIDS L47–48
+        # already overwrites them for stimulation==0 rows.
+        if 'stim_on' in stim_params_df.columns:
+            stim_params_df['stim_on'] = stim_params_df['stim_on'].fillna(False).astype(bool)
+        else:
+            stim_params_df['stim_on'] = False
+        for col in ['stim_duration', 'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width']:
+            if col not in stim_params_df.columns:
+                stim_params_df[col] = 0
+        for col in ['anode_label', 'cathode_label']:
+            if col not in stim_params_df.columns:
+                stim_params_df[col] = ''
+
+        return pd.concat([events.reset_index(drop=True), stim_params_df], axis=1)
     
     def apply_data_to_path(self, row, slope):
         path = pd.DataFrame(row.path)      # extract path data

@@ -6,18 +6,21 @@ import re
 import json
 import os
 import mne_bids
+from pathlib import Path
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
+_HERE = Path(__file__).parent
+
 class FR1_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('FR1/wordpools/wordpool_EN.txt', dtype=str)
-    wordpool_SP = np.loadtxt('FR1/wordpools/wordpool_SP.txt', dtype=str)
-    wordpool_short_EN = np.loadtxt('FR1/wordpools/wordpool_short_EN.txt', dtype=str)
-    wordpool_long_EN = np.loadtxt('FR1/wordpools/wordpool_long_EN.txt', dtype=str)
-    wordpool_long_SP = np.loadtxt('FR1/wordpools/wordpool_long_SP.txt', dtype=str)
+    wordpool_EN = np.loadtxt(_HERE / 'wordpools' / 'wordpool_EN.txt', dtype=str)
+    wordpool_SP = np.loadtxt(_HERE / 'wordpools' / 'wordpool_SP.txt', dtype=str)
+    wordpool_short_EN = np.loadtxt(_HERE / 'wordpools' / 'wordpool_short_EN.txt', dtype=str)
+    wordpool_long_EN = np.loadtxt(_HERE / 'wordpools' / 'wordpool_long_EN.txt', dtype=str)
+    wordpool_long_SP = np.loadtxt(_HERE / 'wordpools' / 'wordpool_long_SP.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/FR1/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+    def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/FR1/'):
+        super().__init__(subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides, root)
 
     # ---------- Events ----------
     def set_wordpool(self):
@@ -39,7 +42,7 @@ class FR1_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
     
     def events_to_BIDS(self):                   # can load events for all 589 FR1 sessions
-        events = self.reader.load('events')
+        events = self._load_events()
         events = cml.correct_retrieval_offsets(events, self.reader)            # apply offset corrections
         events = cml.correct_countdown_lists(events, self.reader)              # apply countdown list corrections
         events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type'})                      # rename columns
@@ -51,11 +54,21 @@ class FR1_BIDS_converter(intracranial_BIDS_converter):
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV') | 
                    (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0            # use rectime
         events['stim_file'] = np.where((events.trial_type=='WORD') & (events.list!=-1), self.wordpool_file, 'n/a')    # add wordpool to word events
-        events.loc[events.answer==-999, 'answer'] = 'n/a'                                                # non-math events no answer
-        events['item_name'] = events.item_name.replace('X', 'n/a')                              
-        events = events.drop(columns=['is_stim', 'stim_list', 'stim_params', 'mstime', 'protocol', 'item_num', 
-                                      'iscorrect', 'eegfile', 'exp_version', 'montage', 'msoffset'])     # drop unneeded fields
-        events = events.drop(columns=['intrusion', 'recalled'])                                          # dropping because confusing
+        # Some sessions (e.g. R1357M FR1 ses-0) have no math distractor at
+        # all and so CMLReader returns events with no `answer` / `test`
+        # columns. Add them as 'n/a' so the rest of the pipeline (and
+        # the column re-ordering at the bottom) keeps working.
+        if 'answer' not in events.columns:
+            events['answer'] = 'n/a'
+        else:
+            events.loc[events.answer==-999, 'answer'] = 'n/a'                                            # non-math events no answer
+        if 'test' not in events.columns:
+            events['test'] = 'n/a'
+        events['item_name'] = events.item_name.replace('X', 'n/a')
+        cols_to_drop = ['is_stim', 'stim_list', 'stim_params', 'mstime', 'protocol', 'item_num',
+                        'iscorrect', 'eegfile', 'exp_version', 'montage', 'msoffset',
+                        'intrusion', 'recalled']
+        events = events.drop(columns=[c for c in cols_to_drop if c in events.columns])
         if 'PRACTICE_WORD' in events.trial_type.unique():                                                # practice words wrongly given serial positions 0-11
             events.loc[events.trial_type=='PRACTICE_WORD', 'serialpos'] = events['serialpos'] + 1
         events = events.fillna('n/a')                                                                    # change NaN to 'n/a'

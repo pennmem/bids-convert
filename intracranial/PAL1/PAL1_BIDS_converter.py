@@ -6,15 +6,18 @@ import re
 import json
 import os
 import mne_bids
+from pathlib import Path
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
+_HERE = Path(__file__).parent
+
 class PAL1_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_EN = np.loadtxt('PAL1/wordpools/wordpool_EN.txt', dtype=str)
-    wordpool_SP = np.loadtxt('PAL1/wordpools/wordpool_SP.txt', dtype=str)
+    wordpool_EN = np.loadtxt(_HERE / 'wordpools' / 'wordpool_EN.txt', dtype=str)
+    wordpool_SP = np.loadtxt(_HERE / 'wordpools' / 'wordpool_SP.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/PAL1/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+    def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/PAL1/'):
+        super().__init__(subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides, root)
 
     # ---------- Events ----------
     def set_wordpool(self):
@@ -27,21 +30,30 @@ class PAL1_BIDS_converter(intracranial_BIDS_converter):
     
     def events_to_BIDS(self):
         ### I THINK THIS NEEDS MORE WORK, OR AT LEAST TESTING
-        events = self.reader.load('events')
+        events = self._load_events()
         events = events.rename(columns={'eegoffset': 'sample', 'type': 'trial_type'})           # rename columns
         events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                      # onset from first event [s]
         events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0   # event duration [s] --> lots of superfluous events may mess this up
         events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)             # replace events with negative duration with 0.0s
         events = self.apply_event_durations(events)                                             # apply well-defined durations [s]
         events['response_time'] = 'n/a'                                                         # response time [s]
-        events.loc[events.trial_type=='PROB', 'response_time'] = events['rectime'] / 1000.0     # math events use rectime [s]
-        events.loc[events.trial_type=='REC_EVENT', 'response_time'] = events['RT'] / 1000.0     # recall events use RT [s]
+        if 'rectime' in events.columns:
+            events.loc[events.trial_type=='PROB', 'response_time'] = events['rectime'] / 1000.0     # math events use rectime [s]
+        if 'RT' in events.columns:
+            events.loc[events.trial_type=='REC_EVENT', 'response_time'] = events['RT'] / 1000.0     # recall events use RT [s]
         events['stim_file'] = np.where((events.trial_type.isin(['STUDY_PAIR', 'PROBE_START', 'TEST_PROBE']))
                                         & (events.list>0), self.wordpool_file, 'n/a')           # add wordpool to word events
-        events.loc[events.answer==-999, 'answer'] = 'n/a'                                       # non-math events no answer
-        
+        if 'answer' in events.columns:
+            events.loc[events.answer==-999, 'answer'] = 'n/a'                                   # non-math events no answer
+
         events = events.fillna('n/a')                    # change NaN to 'n/a'
         events = events.replace('', 'n/a')               # no empty cells
+
+        # Ensure all output columns exist (sessions missing math/recall events may lack some)
+        for col in ['serialpos', 'probepos', 'probe_word', 'resp_word', 'study_1', 'study_2',
+                    'list', 'test', 'answer']:
+            if col not in events.columns:
+                events[col] = 'n/a'
 
         events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file',
                          'serialpos', 'probepos', 'probe_word', 'resp_word', 'study_1', 'study_2',    # leave probepos and serialpos as is

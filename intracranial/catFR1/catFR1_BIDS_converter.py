@@ -6,15 +6,18 @@ import re
 import json
 import os
 import mne_bids
+from pathlib import Path
 from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
+_HERE = Path(__file__).parent
+
 class catFR1_BIDS_converter(intracranial_BIDS_converter):
-    wordpool_categorized_EN = np.loadtxt('catFR1/wordpools/wordpool_categorized_EN.txt', dtype=str)
-    wordpool_categorized_SP = np.loadtxt('catFR1/wordpools/wordpool_categorized_SP.txt', dtype=str)
+    wordpool_categorized_EN = np.loadtxt(_HERE / 'wordpools' / 'wordpool_categorized_EN.txt', dtype=str)
+    wordpool_categorized_SP = np.loadtxt(_HERE / 'wordpools' / 'wordpool_categorized_SP.txt', dtype=str)
 
     # initialize
-    def __init__(self, subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root='/scratch/hherrema/BIDS/catFR1/'):
-        super().__init__(subject, experiment, session, system_version, unit_scale, monopolar, bipolar, mni, tal, area, brain_regions, root)
+    def __init__(self, subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides=None, root='/scratch/hherrema/BIDS/catFR1/'):
+        super().__init__(subject, experiment, session, system_version, unit_scale, area, brain_regions, overrides, root)
 
     # ---------- Events ----------
     def set_wordpool(self):
@@ -32,7 +35,7 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
         return wordpool_file
     
     def events_to_BIDS(self):
-        events = self.reader.load('events')
+        events = self._load_events()
         events = cml.correct_retrieval_offsets(events, self.reader)        # apply offset corrections
         events = cml.correct_countdown_lists(events, self.reader)          # apply countdown list corrections
         events = events.rename(columns={'eegoffset':'sample', 'type': 'trial_type'})               # rename columns
@@ -44,17 +47,22 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV') | 
                   (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0 
         events['stim_file'] = np.where((events.trial_type=='WORD') & (events.list!=-1), self.wordpool_file, 'n/a')     # add wordpool to word events
-        events.loc[events.answer==-999, 'answer'] = 'n/a'                                          # non-math events no answer
+        if 'answer' in events.columns:
+            events['answer'] = events['answer'].astype(object)                                     # allow mixed int/'n/a' values
+            events.loc[events.answer==-999, 'answer'] = 'n/a'                                      # non-math events no answer
+        else:
+            events['answer'] = 'n/a'                                                               # session has no math events
         events['item_name'] = events.item_name.replace('X', 'n/a')
         events['category'] = events.category.replace('X', 'n/a')
-        events = events.drop(columns=['is_stim', 'stim_list', 'stim_params', 'mstime', 'protocol', 'item_num', 'iscorrect', 'eegfile', 'exp_version', 
-                                      'montage', 'msoffset', 'category_num'])                      # drop unneeded fields
-        events = events.drop(columns=['intrusion', 'recalled'])
+        events = events.drop(columns=['is_stim', 'stim_list', 'stim_params', 'mstime', 'protocol', 'item_num', 'iscorrect', 'eegfile', 'exp_version',
+                                      'montage', 'msoffset', 'category_num'], errors='ignore')     # drop unneeded fields
+        events = events.drop(columns=['intrusion', 'recalled'], errors='ignore')
         events = events.fillna('n/a')                                                              # change NaN to 'n/a'
         events = events.replace('', 'n/a')                                                         # no empty cells
 
-        events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name', 'category', 
-                        'serialpos', 'list', 'test', 'answer', 'experiment', 'session', 'subject']]     # re-order columns
+        final_cols = ['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name', 'category',
+                      'serialpos', 'list', 'test', 'answer', 'experiment', 'session', 'subject']
+        events = events.reindex(columns=final_cols, fill_value='n/a')                                   # fill missing cols (e.g. test/answer when session has no math events)
         return events
     
     def apply_event_durations(self, events):

@@ -1,0 +1,246 @@
+subject,experiment,session,original_session,missing_task_laptop,missing_host_pc,task_error,host_error
+FBG490,EFRCourierOpenLoop,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+FBG490,EFRCourierOpenLoop,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+FBG490,EFRCourierOpenLoop,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+FBG490,EFRCourierReadOnly,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+FBG491,EFRCourierOpenLoop,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+FBG491,EFRCourierOpenLoop,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1030J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1030J,ICatFR6,0,0,True,False,ValueError: Log not found: [],
+R1030J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1030J,IFR1,1,1,True,False,ValueError: Log not found: [],
+R1030J,IFR6,0,0,True,False,ValueError: Log not found: [],
+R1204T,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1204T,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1556J,RepFR1,0,0,True,False,ValueError: cannot reindex on an axis with duplicate labels,
+R1564J,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1564J,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1564J,OPS,2,2,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1564J,OPS,3,3,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1564J,OPS,4,4,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1564J,RepFR1,0,0,True,False,ValueError: cannot reindex on an axis with duplicate labels,
+R1579T,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1579T,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1587J,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1589T,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1590T,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1590T,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1590T,OPS,2,2,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1602D,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1604J,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1611T,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1619T,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1619T,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1620J,EFRCourierOpenLoop,3,3,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1620J,EFRCourierOpenLoop,4,4,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1620J,EFRCourierReadOnly,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1620J,EFRCourierReadOnly,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1620J,EFRCourierReadOnly,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1620J,EFRCourierReadOnly,5,5,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1625T,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1625T,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1625T,OPS,2,2,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1625T,RepFR1,1,1,True,True,ValueError: Log not found: [],ValueError: Log not found: []
+R1627T,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1627T,catFR1,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1628E,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1633J,EFRCourierReadOnly,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1633J,RepFR1,2,2,True,False,ValueError: cannot reindex on an axis with duplicate labels,
+R1635T,catFR1,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1635T,catFR1,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1635T,catFR1,4,4,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1637T,EFRCourierReadOnly,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1637T,EFRCourierReadOnly,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1637T,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1640T,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1640T,catFR1,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1640T,catFR1,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1642J,EFRCourierReadOnly,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1642J,EFRCourierReadOnly,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1642J,EFRCourierReadOnly,3,3,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1642J,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1642J,catFR1,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1642J,catFR1,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1642J,catFR1,3,3,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1644T,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1644T,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1644T,OPS,2,2,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1646T,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1646T,catFR1,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1646T,catFR1,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1646T,catFR1,3,3,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1651J,EFRCourierReadOnly,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1651J,EFRCourierReadOnly,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1651J,EFRCourierReadOnly,3,3,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1653J,EFRCourierOpenLoop,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1653J,EFRCourierOpenLoop,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1653J,EFRCourierOpenLoop,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1653J,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1653J,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1653J,OPS,2,2,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1660T,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1663E,EFRCourierReadOnly,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1663E,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1663E,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1663E,OPS,2,2,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1665J,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1665J,catFR1,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1665J,catFR1,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1670J,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1670J,catFR1,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1670J,catFR1,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1670J,catFR1,3,3,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1672T,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1672T,catFR1,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1672T,catFR1,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1672T,catFR1,3,3,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1672T,catFR1,4,4,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1676J,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1676J,catFR1,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1676J,catFR1,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1678T,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1678T,catFR1,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1678T,catFR1,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1679J,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1679J,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1680T,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1680T,catFR1,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1680T,catFR1,2,2,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1680T,catFR1,3,3,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1681J,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1681J,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1681J,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1681J,catFR1,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1687J,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1688T,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1688T,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1688T,OPS,2,2,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1688T,OPS,3,3,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1688T,OPS,4,4,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1688T,OPS,5,5,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1688T,OPS,6,6,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1688T,OPS,7,7,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1689J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1689J,catFR1,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1691J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1693J,EFRCourierOpenLoop,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1693J,EFRCourierOpenLoop,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1693J,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1693J,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1697E,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1704E,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1704E,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1704E,RepFR2,3,3,True,False,ValueError: cannot reindex on an axis with duplicate labels,
+R1709J,EFRCourierOpenLoop,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1709J,EFRCourierOpenLoop,1,1,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1709J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1710J,CPS,0,0,True,False,ValueError: Log not found: [],
+R1710J,CPS,1,1,True,False,ValueError: Log not found: [],
+R1710J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1710J,ICatFR1,1,1,True,False,ValueError: Log not found: [],
+R1710J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1710J,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1710J,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1721J,CPS,0,0,True,False,ValueError: Log not found: [],
+R1721J,CPS,1,1,True,False,ValueError: Log not found: [],
+R1721J,CPS,10,10,True,False,ValueError: Log not found: [],
+R1721J,CPS,11,11,True,False,ValueError: Log not found: [],
+R1721J,CPS,2,2,True,False,ValueError: Log not found: [],
+R1721J,CPS,3,3,True,False,ValueError: Log not found: [],
+R1721J,CPS,4,4,True,False,ValueError: Log not found: [],
+R1721J,CPS,5,5,True,False,ValueError: Log not found: [],
+R1721J,CPS,6,6,True,False,ValueError: Log not found: [],
+R1721J,CPS,7,7,True,False,ValueError: Log not found: [],
+R1721J,CPS,8,8,True,False,ValueError: Log not found: [],
+R1721J,CPS,9,9,True,False,ValueError: Log not found: [],
+R1721J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1721J,ICatFR1,1,1,True,False,ValueError: Log not found: [],
+R1721J,ICatFR1,2,2,True,False,ValueError: Log not found: [],
+R1721J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1721J,IFR1,1,1,True,False,ValueError: Log not found: [],
+R1721J,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1721J,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1723J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1724J,CPS,0,0,True,False,ValueError: Log not found: [],
+R1724J,CPS,1,1,True,False,ValueError: Log not found: [],
+R1724J,CPS,11,11,True,False,ValueError: Log not found: [],
+R1724J,CPS,12,12,True,False,ValueError: Log not found: [],
+R1724J,CPS,2,2,True,False,ValueError: Log not found: [],
+R1724J,CPS,3,3,True,False,ValueError: Log not found: [],
+R1724J,CPS,4,4,True,False,ValueError: Log not found: [],
+R1724J,CPS,5,5,True,False,ValueError: Log not found: [],
+R1724J,CPS,6,6,True,False,ValueError: Log not found: [],
+R1724J,CPS,7,7,True,False,ValueError: Log not found: [],
+R1724J,CPS,8,8,True,False,ValueError: Log not found: [],
+R1724J,CPS,9,9,True,False,ValueError: Log not found: [],
+R1724J,EFRCourierOpenLoop,0,0,True,False,ValueError: No HEARTBEAT / HEARTBEAT_OK events logged!,
+R1724J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1724J,ICatFR1,1,1,True,False,ValueError: Log not found: [],
+R1724J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1724J,IFR1,1,1,True,False,ValueError: Log not found: [],
+R1724J,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1724J,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1725J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1725J,ICatFR1,1,1,True,False,ValueError: Log not found: [],
+R1725J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1728J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1728J,OPS,0,0,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1728J,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1728J,OPS,2,2,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1728J,OPS,3,3,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1728J,OPS,4,4,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1728J,OPS,5,5,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1728J,OPS,6,6,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1728J,OPS,7,7,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1729J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1729J,ICatFR1,1,1,True,False,ValueError: Log not found: [],
+R1729J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1729J,IFR1,1,1,True,False,ValueError: Log not found: [],
+R1729J,OPS,1,1,True,True,ValueError: Log not found: [],AssertionError: session numbers not unique (or not present): []
+R1731J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1735H,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1735H,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1737T,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1738H,ICatFR1,1,1,True,False,ValueError: Log not found: [],
+R1738H,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1740H,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1740H,ICatFR6,0,0,True,False,ValueError: Log not found: [],
+R1740H,ICatFR6,1,1,True,False,ValueError: Log not found: [],
+R1740H,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1740H,IFR1,1,1,True,False,ValueError: Log not found: [],
+R1740H,IFR6,1,1,True,False,ValueError: Log not found: [],
+R1740H,IFR6,2,2,True,False,ValueError: Log not found: [],
+R1740H,IFR6,3,3,True,False,ValueError: Log not found: [],
+R1742J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1742J,ICatFR6,0,0,True,False,ValueError: Log not found: [],
+R1742J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1742J,IFR1,1,1,True,False,ValueError: Log not found: [],
+R1742J,IFR6,0,0,True,False,ValueError: Log not found: [],
+R1742J,IFR6,1,1,True,False,ValueError: Log not found: [],
+R1743H,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1743H,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1743H,IFR1,1,1,True,False,ValueError: Log not found: [],
+R1745H,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1745H,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1745H,IFR1,1,1,True,False,ValueError: Log not found: [],
+R1745H,IFR6,0,0,True,False,ValueError: Log not found: [],
+R1750J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1751J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1751J,ICatFR1,1,1,True,False,ValueError: Log not found: [],
+R1751J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1751J,IFR1,1,1,True,False,ValueError: Log not found: [],
+R1753J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1754H,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1754H,ICatFR6,1,1,True,False,ValueError: Log not found: [],
+R1754H,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1754H,IFR1,1,1,True,False,ValueError: Log not found: [],
+R1754H,IFR6,0,0,True,False,ValueError: Log not found: [],
+R1754H,IFR6,2,2,True,False,ValueError: Log not found: [],
+R1770J,ICatFR1,0,0,True,False,ValueError: Log not found: [],
+R1770J,ICatFR1,1,1,True,False,ValueError: Log not found: [],
+R1770J,IFR1,1,1,True,False,ValueError: Log not found: [],
+R1773J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1775J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1775J,IFR1,1,1,True,False,ValueError: Log not found: [],
+R1776J,IFR1,0,0,True,False,ValueError: Log not found: [],
+R1778J,IFR1,0,0,True,False,ValueError: Log not found: [],
