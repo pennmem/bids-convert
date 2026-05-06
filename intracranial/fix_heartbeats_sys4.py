@@ -23,6 +23,25 @@ def ms_to_datetime(mstime):
     # Convert milliseconds to seconds and then to a datetime object
     return datetime.fromtimestamp(mstime / 1000.0)
 
+
+def _get_field(obj, key):
+    """Return obj[key], tolerating obj being a JSON-encoded string or non-dict.
+
+    Some sessions (e.g. R1556J_1 RepFR2) store data['message'] as a stringified
+    JSON object rather than a nested dict, which made the previous
+    `dict.get(x, key)` call raise "descriptor 'get' for 'dict' objects doesn't
+    apply to a 'str' object" on those rows.
+    """
+    if isinstance(obj, str):
+        try:
+            obj = json.loads(obj)
+        except (json.JSONDecodeError, ValueError):
+            return None
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return None
+
+
 def get_heart(subject, exp, sess, load_host_pc=False, drop_network_test=False, verbose=False):
     # Finds and reads the session log file from the task laptop
     # sess: int, original session number (used in /data10 session_*/ directory)
@@ -54,14 +73,14 @@ def get_heart(subject, exp, sess, load_host_pc=False, drop_network_test=False, v
     # reads the data out of the dict format
     if load_host_pc:
         heart_beat = heart_beat[heart_beat.type.isin(['HEARTBEAT', 'HEARTBEAT_OK'])]
-        heart_beat['count'] = heart_beat.data.apply(lambda x: dict.get(x, 'count'))
+        heart_beat['count'] = heart_beat.data.apply(lambda x: _get_field(x, 'count'))
     else:
-        heart_beat['message'] = heart_beat.data.apply(lambda x: dict.get(x, 'message'))
-        heart_beat.dropna(inplace=True)
-        heart_beat['type'] = heart_beat.message.apply(lambda x: dict.get(x, 'type'))
-        heart_beat['data'] = heart_beat.message.apply(lambda x: dict.get(x, 'data'))
+        heart_beat['message'] = heart_beat.data.apply(lambda x: _get_field(x, 'message'))
+        heart_beat.dropna(subset=['message'], inplace=True)
+        heart_beat['type'] = heart_beat.message.apply(lambda x: _get_field(x, 'type'))
+        heart_beat['data'] = heart_beat.message.apply(lambda x: _get_field(x, 'data'))
         heart_beat = heart_beat[heart_beat.type.isin(['HEARTBEAT', 'HEARTBEAT_OK'])]
-        heart_beat['count'] = heart_beat.data.apply(lambda x: dict.get(x, 'count'))
+        heart_beat['count'] = heart_beat.data.apply(lambda x: _get_field(x, 'count'))
         if len(heart_beat) == 0: raise ValueError('No HEARTBEAT / HEARTBEAT_OK events logged!')
 
     # skip heartbeats after initial heartbeat test, which is required to pass before starting a session
