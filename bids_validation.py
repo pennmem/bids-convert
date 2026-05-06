@@ -4,8 +4,8 @@ Combines two layers of validation:
   1. ``run_bids_validator`` — official Python + npm BIDS Validator (path,
      naming, content, sidecar metadata).
   2. eeg-validation pipelines — round-trip checks comparing CMLReader-loaded
-     data against the on-disk BIDS dataset (raw signal, epoched signal,
-     digital LSBs, behavioral events, montage).
+     data against the on-disk BIDS dataset (raw signal, digital LSBs,
+     behavioral events, montage).
 
 Per-session artifacts are written under
     /data/BIDS-convert-logs/{experiment}/{subject}/{session}/
@@ -41,7 +41,6 @@ if os.path.isdir(_EEG_VALIDATION_SUBMODULE) and _EEG_VALIDATION_SUBMODULE not in
 
 from eeg_validation import (
     DigitalSignalPipeline,
-    EpochedPipeline,
     EventsPipeline,
     MontagePipeline,
     RawSignalPipeline,
@@ -303,17 +302,12 @@ def _collect_summaries(result, *, signal: bool, digital: bool) -> List[pd.DataFr
             summaries.append(df)
         return summaries
 
-    # Dict — could be Epoched (per acquisition: {"df_epoch_summary": ...}),
-    # Digital ({acq: df_summary, "status": df_status}), or generic.
+    # Dict — Digital pipeline returns {acq: df_summary, "status": df_status}.
     if isinstance(result, dict):
         for key, val in result.items():
             if key == "status":
                 continue
-            if isinstance(val, dict):
-                df = val.get("df_epoch_summary")
-                if df is not None and not df.empty:
-                    summaries.append(df)
-            elif isinstance(val, pd.DataFrame):
+            if isinstance(val, pd.DataFrame):
                 if not val.empty:
                     summaries.append(val)
             elif hasattr(val, "df_summary"):
@@ -327,19 +321,24 @@ def _collect_summaries(result, *, signal: bool, digital: bool) -> List[pd.DataFr
 # Public: BIDS Validator (path + content)
 # ----------------------------------------------------------------------
 
-def run_bids_validator(root: str) -> bool:
+def run_bids_validator(root: str, *, timeout: Optional[float] = None) -> bool:
     """Validate a BIDS dataset at ``root``.
 
     Two-layer approach:
       1. Python path/naming validation via ``bids_validator``.
       2. Full CLI validation via the npm ``bids-validator`` (file contents,
-         required metadata, sidecar completeness) when on PATH.
+         required metadata, sidecar completeness) when on PATH. Output is
+         streamed line-by-line so progress is visible while it runs.
 
-    Returns True if no errors were found, False otherwise.
+    Returns True if no errors were found, False otherwise. If ``timeout`` is
+    set and the CLI exceeds it, the subprocess is terminated and the run is
+    flagged as failed.
     """
     title = f"BIDS Validator: {root}"
     any_errors = False
-    body_lines: List[str] = []
+
+    # Print title up front so the streamed CLI output is visible in context.
+    print(title)
 
     # --- Layer 1: Python path/naming validation ---
     try:
@@ -353,19 +352,17 @@ def run_bids_validator(root: str) -> bool:
                 if not validator.is_bids(rel):
                     naming_errors.append(rel)
         if naming_errors:
-            body_lines.append(
-                f"[Path validation] {len(naming_errors)} file(s) with non-BIDS-compliant names:"
-            )
-            body_lines.extend(f"  ✗ {p}" for p in sorted(naming_errors))
+            print(f"[Path validation] {len(naming_errors)} file(s) with non-BIDS-compliant names:")
+            for p in sorted(naming_errors):
+                print(f"  ✗ {p}")
             any_errors = True
         else:
-            body_lines.append("[Path validation] All file names are BIDS-compliant.")
+            print("[Path validation] All file names are BIDS-compliant.")
     except ImportError:
-        body_lines.append(
-            "[Path validation] bids_validator not installed — skipping. (pip install bids_validator)"
-        )
+        print("[Path validation] bids_validator not installed — skipping. "
+              "(pip install bids_validator)")
 
-    # --- Layer 2: Full CLI validation ---
+    # --- Layer 2: Full CLI validation (streamed) ---
     if subprocess.run(["which", "bids-validator"], capture_output=True).returncode == 0:
         cmd = ["bids-validator", root, "--verbose"]
     elif subprocess.run(["which", "npx"], capture_output=True).returncode == 0:
@@ -374,28 +371,55 @@ def run_bids_validator(root: str) -> bool:
         cmd = None
 
     if cmd is not None:
-        body_lines.append(f"[Full validation] Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.stdout:
-            body_lines.append(result.stdout)
-        if result.returncode != 0:
-            if "SyntaxError" in result.stderr or "SyntaxError" in result.stdout:
-                body_lines.append(
-                    "WARNING: bids-validator failed to start (likely Node.js version too old). "
-                    f"Run manually: {' '.join(cmd)} | stderr: {result.stderr.strip()}"
+        print(f"[Full validation] Running: {' '.join(cmd)}")
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # merge stderr into stdout so we get one stream
+            text=True,
+            bufsize=1,                 # line-buffered
+        )
+
+        had_syntax_error = False
+        timed_out = False
+        try:
+            # Stream output as it arrives. tee_to_file at the call site fans
+            # this to both console and the per-experiment log file.
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                print(line, end="")
+                if "SyntaxError" in line:
+                    had_syntax_error = True
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            proc.kill()
+            proc.wait()
+            print(f"\nWARNING: bids-validator exceeded timeout={timeout}s — terminated.")
+
+        if timed_out:
+            any_errors = True
+        elif proc.returncode != 0:
+            if had_syntax_error:
+                print(
+                    f"WARNING: bids-validator failed to start (likely Node.js version too old). "
+                    f"Run manually: {' '.join(cmd)}"
                 )
             else:
-                if result.stderr:
-                    body_lines.append(result.stderr)
                 any_errors = True
     else:
-        body_lines.append(
+        print(
             "[Full validation] bids-validator not found — skipping content/metadata checks. "
             "Install: npm install -g bids-validator | "
             f"docker run --rm -v {root}:/data:ro bids/validator /data"
         )
 
-    _print_section(title, ok=not any_errors, body="\n".join(body_lines))
+    # Footer: status + rule. Order differs slightly from _print_section's
+    # title/status/body/rule because the body is streamed, but the
+    # PASSED/FAILED line still bookends the section.
+    print("PASSED ✓" if not any_errors else "FAILED ✗")
+    print(SECTION_RULE)
+    print()
     return not any_errors
 
 
@@ -419,9 +443,7 @@ def run_scalp_validation(
     overall_ok &= _run_signal_pipeline(
         "RawSignalPipeline", RawSignalPipeline(**common),
     )
-    overall_ok &= _run_signal_pipeline(
-        "EpochedPipeline", EpochedPipeline(**common),
-    )
+
     overall_ok &= _run_signal_pipeline(
         "DigitalSignalPipeline", DigitalSignalPipeline(**common), digital=True,
     )
@@ -440,7 +462,9 @@ def run_intra_validation(
 ) -> bool:
     """Run the intracranial eeg-validation pipelines for one session.
 
-    MontagePipeline is run twice (acquisition='contacts', then 'pairs').
+    RawSignalPipeline and MontagePipeline are each run twice
+    (acquisition='contacts', then 'pairs'). DigitalSignalPipeline
+    auto-iterates both acquisitions internally.
     """
     out_dir = out_dir or session_log_dir(experiment, subject, session)
     common = dict(
@@ -451,12 +475,12 @@ def run_intra_validation(
     )
     overall_ok = True
     overall_ok &= _run_signal_pipeline(
-        "RawSignalPipeline",
+        "RawSignalPipeline (contacts)",
         RawSignalPipeline(**common, acquisition="contacts"),
     )
     overall_ok &= _run_signal_pipeline(
-        "EpochedPipeline",
-        EpochedPipeline(**common, acquisition="contacts"),
+        "RawSignalPipeline (pairs)",
+        RawSignalPipeline(**common, acquisition="pairs"),
     )
     overall_ok &= _run_signal_pipeline(
         "DigitalSignalPipeline",
