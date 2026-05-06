@@ -321,6 +321,47 @@ def _collect_summaries(result, *, signal: bool, digital: bool) -> List[pd.DataFr
 # Public: BIDS Validator (path + content)
 # ----------------------------------------------------------------------
 
+def _read_bidsignore(root: str) -> List[str]:
+    """Return non-comment, non-blank patterns from ``{root}/.bidsignore``.
+
+    Always includes ``.bidsignore`` itself so we never flag it as a
+    non-BIDS file. Patterns are kept verbatim and matched via
+    :func:`fnmatch.fnmatch` against repo-relative paths (with leading
+    slash stripped) and against bare basenames.
+    """
+    patterns: List[str] = [".bidsignore"]
+    path = os.path.join(root, ".bidsignore")
+    if not os.path.exists(path):
+        return patterns
+    with open(path) as f:
+        for line in f:
+            s = line.strip()
+            if s and not s.startswith("#"):
+                patterns.append(s)
+    return patterns
+
+
+def _matches_bidsignore(rel: str, patterns: List[str]) -> bool:
+    """True if ``rel`` (a leading-slash repo path) matches any pattern.
+
+    Mirrors what the npm bids-validator does in spirit: matches both
+    the full path (without the leading slash) and the basename.
+    """
+    if not patterns:
+        return False
+    import fnmatch
+    rel_stripped = rel.lstrip("/")
+    base = os.path.basename(rel_stripped)
+    for pat in patterns:
+        if fnmatch.fnmatch(rel_stripped, pat) or fnmatch.fnmatch(base, pat):
+            return True
+        # Support directory-style patterns like 'derivatives/' that the
+        # npm validator treats as "anywhere under derivatives".
+        if pat.endswith("/") and rel_stripped.startswith(pat):
+            return True
+    return False
+
+
 def run_bids_validator(root: str, *, timeout: Optional[float] = None) -> bool:
     """Validate a BIDS dataset at ``root``.
 
@@ -344,11 +385,18 @@ def run_bids_validator(root: str, *, timeout: Optional[float] = None) -> bool:
     try:
         from bids_validator import BIDSValidator
         validator = BIDSValidator()
+
+        # Read .bidsignore (npm CLI feature) and honor it ourselves so
+        # Layer 1 doesn't flag files the npm validator would skip.
+        ignore_patterns = _read_bidsignore(root)
+
         naming_errors: List[str] = []
         for dirpath, _, files in os.walk(root):
             for fname in files:
                 full = os.path.join(dirpath, fname)
                 rel = "/" + os.path.relpath(full, root)
+                if _matches_bidsignore(rel, ignore_patterns):
+                    continue
                 if not validator.is_bids(rel):
                     naming_errors.append(rel)
         if naming_errors:
