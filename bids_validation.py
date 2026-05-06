@@ -31,6 +31,14 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
+# eeg-validation lives as a git submodule at ``bids-convert/eeg-validation/``
+# (note the dash). Python wants the parent of the ``eeg_validation`` package
+# on sys.path, so add the submodule directory before importing.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_EEG_VALIDATION_SUBMODULE = os.path.join(_HERE, "eeg-validation")
+if os.path.isdir(_EEG_VALIDATION_SUBMODULE) and _EEG_VALIDATION_SUBMODULE not in sys.path:
+    sys.path.insert(0, _EEG_VALIDATION_SUBMODULE)
+
 from eeg_validation import (
     DigitalSignalPipeline,
     EpochedPipeline,
