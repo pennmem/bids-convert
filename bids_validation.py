@@ -411,7 +411,14 @@ def run_bids_validator(root: str, *, timeout: Optional[float] = None) -> bool:
               "(pip install bids_validator)")
 
     # --- Layer 2: Full CLI validation (streamed) ---
-    if subprocess.run(["which", "bids-validator"], capture_output=True).returncode == 0:
+    # Resolve the validator binary. Prefer one in the running Python's bin/
+    # directory (so an env's `npm install -g bids-validator` is found even
+    # without `conda activate`), then PATH, then fall back to `npx` (which
+    # auto-fetches but prompts on first use).
+    env_bin = os.path.join(os.path.dirname(sys.executable), "bids-validator")
+    if os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+        cmd = [env_bin, root, "--verbose"]
+    elif subprocess.run(["which", "bids-validator"], capture_output=True).returncode == 0:
         cmd = ["bids-validator", root, "--verbose"]
     elif subprocess.run(["which", "npx"], capture_output=True).returncode == 0:
         cmd = ["npx", "bids-validator", root, "--verbose"]
