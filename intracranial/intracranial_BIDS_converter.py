@@ -19,23 +19,53 @@ from .edf_digital_writer import resolve_edf_units, write_digital
 # region-label atlases (not coordinate frames) — they belong as
 # *.region columns in electrodes.tsv, not as separate space-* files.
 CML_TO_BIDS_SPACE = {
-    # Standard BIDS iEEG space labels (accepted by mne_bids).
+    # Standard BIDS iEEG space labels (accepted by mne_bids and bids-validator).
     'mni': 'MNI152NLin6ASym',
     'tal': 'Talairach',
     'avg': 'fsaverage',
     'vox': 'Pixels',
-    # Non-standard labels. mne_bids.BIDSPath.update(space=...) rejects
-    # these, so write_BIDS_electrodes / write_BIDS_coords build the path
-    # manually instead of going through BIDSPath validation.
-    'avg.corrected': 'fsaverageBrainshift',
-    'ind': 'fsnative',
-    'ind.corrected': 'fsnativeBrainshift',
-    'ind.dural': 'fsnativeDural',
-    't1_mri': 't1MRI',
+    # Lab-specific spaces with no BIDS-standard equivalent are mapped to
+    # `Other`. The variant is preserved in the filename via the `desc-`
+    # entity (see CML_TO_BIDS_DESC) and in the JSON sidecar via
+    # `iEEGCoordinateSystemDescription` (see _SPACE_DESCRIPTIONS).
+    # bids-validator allows `space-Other` natively, but does NOT list
+    # `desc-` as an allowed entity for electrodes/coordsystem files, so
+    # the desc-suffixed paths are added to `.bidsignore` automatically.
+    'avg.corrected': 'Other',
+    'ind':           'Other',
+    'ind.corrected': 'Other',
+    'ind.dural':     'Other',
+    't1_mri':        'Other',
 }
-assert len(set(CML_TO_BIDS_SPACE.values())) == len(CML_TO_BIDS_SPACE), (
-    "CML_TO_BIDS_SPACE has duplicate BIDS values — multiple CML keys "
-    "would overwrite the same space-*_electrodes.tsv on disk."
+
+# When the BIDS space is `Other`, this entity disambiguates the variant
+# in the on-disk filename. Only CML keys whose CML_TO_BIDS_SPACE value is
+# `Other` should appear here.
+CML_TO_BIDS_DESC = {
+    'avg.corrected': 'fsaverageBrainshift',
+    'ind':           'fsnative',
+    'ind.corrected': 'fsnativeBrainshift',
+    'ind.dural':     'fsnativeDural',
+    't1_mri':        't1MRI',
+}
+
+# Human-readable descriptions written to `iEEGCoordinateSystemDescription`
+# when `iEEGCoordinateSystem == "Other"`. Required by the BIDS spec for
+# the `Other` coordinate system.
+_SPACE_DESCRIPTIONS = {
+    'avg.corrected': 'FreeSurfer fsaverage with brainshift correction.',
+    'ind':           'FreeSurfer subject-native pial surface (fsnative).',
+    'ind.corrected': 'FreeSurfer subject-native with brainshift correction.',
+    'ind.dural':     'FreeSurfer subject-native dural surface.',
+    't1_mri':        'Subject T1-weighted MRI native space.',
+}
+
+# Sanity: every CML key whose space is `Other` must have a matching
+# desc + description entry, since they're keyed off the same CML space.
+assert {k for k, v in CML_TO_BIDS_SPACE.items() if v == 'Other'} == \
+       set(CML_TO_BIDS_DESC.keys()) == set(_SPACE_DESCRIPTIONS.keys()), (
+    "CML space 'Other' mappings are out of sync across "
+    "CML_TO_BIDS_SPACE / CML_TO_BIDS_DESC / _SPACE_DESCRIPTIONS."
 )
 
 
@@ -171,13 +201,45 @@ class intracranial_BIDS_converter:
     def write_BIDS_beh(self):
         bids_path = self._BIDS_path().update(suffix='beh', extension='.tsv', datatype='beh')
         os.makedirs(bids_path.directory, exist_ok=True)
-        
+
         # write events to tsv
         self._to_tsv(self.events, bids_path.fpath)
 
         # write sidecar json
         with open(bids_path.update(extension='.json').fpath, 'w') as f:
             json.dump(fp=f, obj=self.events_descriptor)
+
+        # Stage the stim_file referenced by events.tsv so bids-validator
+        # finds it under <root>/stimuli/<rel_path>.
+        self._stage_stim_file()
+
+    def _stage_stim_file(self):
+        """Copy the wordpool referenced by events.tsv to ``<root>/stimuli/``.
+
+        BIDS requires every value in the events.tsv `stim_file` column to
+        exist at ``<root>/stimuli/<value>``. Subclasses ship their
+        wordpools alongside the converter module (``<subclass_dir>/<rel>``,
+        e.g. ``YC1/wordpools/wordpool.txt``). This helper copies that
+        source file to the BIDS stimuli directory if missing. It's safe
+        to call multiple times — re-runs are no-ops.
+        """
+        rel = getattr(self, 'wordpool_file', None)
+        if not rel or rel == 'n/a':
+            return
+        # Source: <subclass_module_dir>/<rel> (e.g. ".../YC1/wordpools/wordpool.txt")
+        import inspect, shutil
+        subclass_dir = os.path.dirname(os.path.abspath(inspect.getfile(type(self))))
+        src = os.path.join(subclass_dir, rel)
+        dst = os.path.join(self.root, 'stimuli', rel)
+        if os.path.exists(dst):
+            return
+        if not os.path.exists(src):
+            print(f"WARNING: events.tsv references stim_file={rel!r} but source "
+                  f"not found at {src} — bids-validator will flag this as missing.")
+            return
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copyfile(src, dst)
+        print(f"STIM: copied {src} -> {dst}")
 
     # ---------- Electrodes ----------
     def load_contacts(self):
@@ -371,65 +433,139 @@ class intracranial_BIDS_converter:
     def make_electrodes_sidecar(self, cml_space):
         bids_space = CML_TO_BIDS_SPACE[cml_space]
         sidecar = {
-            'name': 'Label of electrode.',
-            'x': f'x-axis position in {bids_space} coordinates',
-            'y': f'y-axis position in {bids_space} coordinates',
-            'z': f'z-axis position in {bids_space} coordinates',
-            'size': 'Surface area of electrode.',
-            'group': 'Group of channels electrode belongs to (same shank).',
-            'hemisphere': 'Hemisphere of electrode location.',
-            'type': 'Type of electrode.',
+            "name":       {"Description": "Label of electrode."},
+            "x":          {"Description": f"x-axis position in {bids_space} coordinates."},
+            "y":          {"Description": f"y-axis position in {bids_space} coordinates."},
+            "z":          {"Description": f"z-axis position in {bids_space} coordinates."},
+            "size":       {"Description": "Surface area of electrode."},
+            "group":      {"Description": "Group of channels electrode belongs to (same shank)."},
+            "hemisphere": {"Description": "Hemisphere of electrode location."},
+            "type":       {"Description": "Type of electrode."},
         }
 
         if self.brain_regions.get('wb.region', 0) > 0:
-            sidecar['wb.region'] = 'Brain region of electrode location from subcortical neuroradiology pipeline.'
+            sidecar['wb.region'] = {"Description": "Brain region of electrode location from subcortical neuroradiology pipeline."}
         if self.brain_regions.get('ind.region', 0) > 0:
-            sidecar['ind.region'] = 'Brain region of electrode location from surface neuroradiology pipeline.'
+            sidecar['ind.region'] = {"Description": "Brain region of electrode location from surface neuroradiology pipeline."}
         if self.brain_regions.get('das.region', 0) > 0:
-            sidecar['das.region'] = 'Brain region of electrode location from hand annotations by neuroradiologist.  Usually in MTL.'
+            sidecar['das.region'] = {"Description": "Brain region of electrode location from hand annotations by neuroradiologist.  Usually in MTL."}
         if self.brain_regions.get('stein.region', 0) > 0:
-            sidecar['stein.region'] = 'Brain region of electrode location from hand annotations by neurologist.  Usually in MTL.'
+            sidecar['stein.region'] = {"Description": "Brain region of electrode location from hand annotations by neurologist.  Usually in MTL."}
 
         return sidecar
 
     def make_channels_sidecar(self):
         return {
-            'name': 'Label of the channel.',
-            'type': 'Type of channel (ECOG, SEEG, etc.).',
-            'units': 'Physical unit of the values represented in this channel.',
-            'low_cutoff': 'Frequencies used for the high-pass filter applied to the channel, in Hz.',
-            'high_cutoff': 'Frequencies used for the low-pass filter applied to the channel, in Hz.',
-            'reference': 'Specification of the reference (e.g. bipolar, CAR, intracranial). Bipolar channels.tsv only.',
-            'group': 'Group of channels this channel belongs to (same shank).',
-            'sampling_frequency': 'Sampling rate of the channel, in Hz.',
-            'description': 'Brief free-form description of the channel.',
-            'notch': 'Frequencies used for the notch filter applied to the channel, in Hz.',
-            'status': "Data quality observed on the channel ('good' or 'bad'). Set to 'bad' for channels not present in the recording or marked as bad_channel in electrode_categories.txt.",
-            'status_description': "Free-form description of the issue when status='bad' (e.g. 'not_in_recording', 'bad_channel').",
-            'category': "Lab-specific channel categorization derived from electrode_categories.txt. Comma-separated list of one or more of: bad_channel, soz (seizure onset zone), interictal (interictal spiking), brain_lesion. 'n/a' if none apply or if electrode_categories.txt was unavailable.",
+            "name": {"Description": "Label of the channel."},
+            "type": {
+                "Description": "Type of channel.",
+                "Levels": {
+                    "ECOG":  "Electrocorticography",
+                    "SEEG":  "Stereo-EEG / depth electrodes",
+                    "EEG":   "Electroencephalography",
+                    "EOG":   "Electrooculography",
+                    "ECG":   "Electrocardiography",
+                    "EMG":   "Electromyography",
+                    "TRIG":  "Trigger",
+                    "AUDIO": "Audio",
+                    "REF":   "Reference",
+                    "MISC":  "Miscellaneous",
+                    "OTHER": "Other channel type",
+                },
+            },
+            "units": {
+                "Description": "Physical unit of the values represented in this channel.",
+                "Units": "µV",
+            },
+            "low_cutoff": {
+                "Description": "Frequencies used for the high-pass filter applied to the channel.",
+                "Units": "Hz",
+            },
+            "high_cutoff": {
+                "Description": "Frequencies used for the low-pass filter applied to the channel.",
+                "Units": "Hz",
+            },
+            "reference": {
+                "Description": "Specification of the reference (bipolar, CAR, intracranial). Bipolar channels.tsv only.",
+            },
+            "group": {
+                "Description": "Group of channels this channel belongs to (same shank).",
+            },
+            "sampling_frequency": {
+                "Description": "Sampling rate of the channel.",
+                "Units": "Hz",
+            },
+            "description": {"Description": "Brief free-form description of the channel."},
+            "notch": {
+                "Description": "Frequencies used for the notch filter applied to the channel.",
+                "Units": "Hz",
+            },
+            "status": {
+                "Description": "Data quality observed on the channel.",
+                "Levels": {
+                    "good": "Channel passed quality checks.",
+                    "bad":  "Channel failed quality checks (e.g. not in recording, marked bad in electrode_categories.txt).",
+                },
+            },
+            "status_description": {
+                "Description": "Free-form description of the issue when status='bad' (e.g. 'not_in_recording', 'bad_channel').",
+            },
+            "category": {
+                "Description": (
+                    "Lab-specific channel categorization derived from electrode_categories.txt. "
+                    "Comma-separated list of one or more of: bad_channel, soz (seizure onset zone), "
+                    "interictal (interictal spiking), brain_lesion. 'n/a' if none apply or if "
+                    "electrode_categories.txt was unavailable."
+                ),
+            },
         }
 
     def _space_file(self, cml_space, suffix, extension):
-        """Build `sub-X_ses-Y_task-Z_space-<label>_<suffix>.<ext>` directly,
-        bypassing mne_bids.BIDSPath validation (which rejects non-standard
-        BIDS space labels like `fsnative`, `fsaverageBrainshift`, etc.)."""
+        """Build `sub-X_ses-Y_task-Z_space-<label>[_desc-<variant>]_<suffix>.<ext>`
+        directly, bypassing mne_bids.BIDSPath validation (which doesn't
+        accept the `desc-` entity for electrodes/coordsystem files).
+
+        For lab-specific spaces (CML key in CML_TO_BIDS_DESC), the BIDS
+        space label is `Other` and the variant is encoded as `desc-<variant>`.
+        For standard spaces (mni / tal / avg / vox), no `desc-` is added.
+        """
         bids_space = CML_TO_BIDS_SPACE[cml_space]
+        desc = CML_TO_BIDS_DESC.get(cml_space)
         ieeg_dir = self._session_dir('ieeg')
         os.makedirs(ieeg_dir, exist_ok=True)
-        fname = f"{self._bids_prefix()}_space-{bids_space}_{suffix}{extension}"
+        parts = [self._bids_prefix(), f'space-{bids_space}']
+        if desc:
+            parts.append(f'desc-{desc}')
+        parts.append(suffix)
+        fname = '_'.join(parts) + extension
         return os.path.join(ieeg_dir, fname)
 
     def write_BIDS_electrodes(self, cml_space, electrodes, sidecar):
         self._to_tsv(electrodes, self._space_file(cml_space, 'electrodes', '.tsv'))
         with open(self._space_file(cml_space, 'electrodes', '.json'), 'w') as f:
             json.dump(fp=f, obj=sidecar)
+        self._ensure_bidsignore_for_space(cml_space)
 
     def _coordinate_system(self, cml_space):
-        return {'iEEGCoordinateSystem': CML_TO_BIDS_SPACE[cml_space], 'iEEGCoordinateUnits': 'mm'}
+        """Build the coordsystem.json content.
+
+        BIDS rules:
+        - `iEEGCoordinateUnits` must be one of: m, mm, cm, pixels, n/a.
+        - When `iEEGCoordinateSystem == "Pixels"`, units MUST be "pixels".
+        - When `iEEGCoordinateSystem == "Other"`,
+          `iEEGCoordinateSystemDescription` is required.
+        """
+        bids_space = CML_TO_BIDS_SPACE[cml_space]
+        units = 'pixels' if bids_space == 'Pixels' else 'mm'
+        out = {'iEEGCoordinateSystem': bids_space, 'iEEGCoordinateUnits': units}
+        if bids_space == 'Other':
+            out['iEEGCoordinateSystemDescription'] = _SPACE_DESCRIPTIONS[cml_space]
+        return out
 
     def write_BIDS_coords(self, cml_space):
         with open(self._space_file(cml_space, 'coordsystem', '.json'), 'w') as f:
             json.dump(fp=f, obj=self._coordinate_system(cml_space))
+        self._ensure_bidsignore_for_space(cml_space)
 
     # ---------- Channels ----------
     def load_pairs(self):
@@ -588,14 +724,35 @@ class intracranial_BIDS_converter:
         self._to_tsv(mapping_df, out_path)
 
         # Ensure .bidsignore includes channelmap files
+        self._ensure_bidsignore_pattern('**/*_channelmap.tsv')
+
+    def _ensure_bidsignore_pattern(self, pattern):
+        """Idempotently add a glob pattern to ``{root}/.bidsignore``.
+
+        The file is created if missing. No-ops if the pattern is already
+        present (line-equality match).
+        """
         bidsignore = os.path.join(self.root, '.bidsignore')
-        pattern = '**/*_channelmap.tsv'
         existing = set()
         if os.path.exists(bidsignore):
-            existing = set(open(bidsignore).read().splitlines())
-        if pattern not in existing:
-            with open(bidsignore, 'a') as f:
-                f.write(pattern + '\n')
+            with open(bidsignore) as f:
+                existing = set(f.read().splitlines())
+        if pattern in existing:
+            return
+        os.makedirs(os.path.dirname(bidsignore) or '.', exist_ok=True)
+        with open(bidsignore, 'a') as f:
+            f.write(pattern + '\n')
+
+    def _ensure_bidsignore_for_space(self, cml_space):
+        """For lab-specific spaces (mapped to `space-Other` with a
+        `desc-<variant>` entity), add a `.bidsignore` pattern so the
+        bids-validator skips them — `desc-` isn't an allowed entity for
+        iEEG electrodes/coordsystem filenames per the BIDS schema, even
+        though `space-Other` itself is fine. Standard spaces (mni / tal /
+        avg / vox) don't need an entry."""
+        desc = CML_TO_BIDS_DESC.get(cml_space)
+        if desc:
+            self._ensure_bidsignore_pattern(f'**/*_space-Other_desc-{desc}_*')
 
     def write_BIDS_channels(self, ref):
         bids_path = self._BIDS_path().update(suffix='channels', extension='.tsv', datatype='ieeg')
@@ -1067,6 +1224,9 @@ class intracranial_BIDS_converter:
             self.wordpool_file = self.set_wordpool()
             self.events = self.events_to_BIDS()
             self.events_descriptor = self.make_events_descriptor()
+            # Behavioral stage was skipped (events.tsv already on disk) but
+            # the stim file may not have been staged on the prior run; do it now.
+            self._stage_stim_file()
 
         needs_eeg_meta = run_mono_eeg or run_bi_eeg or run_mono_channels or run_bi_channels
         needs_contacts = run_electrodes or run_mono_eeg or run_mono_channels
