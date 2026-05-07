@@ -426,6 +426,34 @@ def run_bids_validator(root: str, *, timeout: Optional[float] = None) -> bool:
         cmd = None
 
     if cmd is not None:
+        # Build a child PATH that includes the validator binary's own
+        # directory. This is what makes `#!/usr/bin/env node` resolvable
+        # when a user invokes the env's Python directly without
+        # `conda activate` (e.g. on a SLURM compute node).
+        sub_env = os.environ.copy()
+        bin_dir = os.path.dirname(cmd[0])
+        if bin_dir:
+            sub_env["PATH"] = bin_dir + os.pathsep + sub_env.get("PATH", "")
+
+        # Preflight: bids-validator's shebang requires `node` on PATH. If
+        # it isn't reachable, fail loudly with an actionable message
+        # rather than emitting an opaque "/usr/bin/env: node: No such
+        # file or directory" later.
+        import shutil
+        node_path = shutil.which("node", path=sub_env.get("PATH", ""))
+        if node_path is None:
+            print(
+                f"ERROR: bids-validator's runtime `node` was not found on PATH "
+                f"(searched {bin_dir or '<empty>'}, then $PATH). "
+                f"Install Node.js into your env, e.g.:\n"
+                f"      mamba install -n <env> -c conda-forge 'nodejs>=20'\n"
+                f"  Then re-run with --validate / --bids-validator."
+            )
+            print("FAILED ✗")
+            print(SECTION_RULE)
+            print()
+            return False
+
         print(f"[Full validation] Running: {' '.join(cmd)}")
         proc = subprocess.Popen(
             cmd,
@@ -433,6 +461,7 @@ def run_bids_validator(root: str, *, timeout: Optional[float] = None) -> bool:
             stderr=subprocess.STDOUT,  # merge stderr into stdout so we get one stream
             text=True,
             bufsize=1,                 # line-buffered
+            env=sub_env,
         )
 
         had_syntax_error = False
@@ -614,6 +643,8 @@ def validate_jobs(
     montage_for_job=None,
     log_root_per_experiment: bool = True,
     verbose: bool = False,
+    run_eeg_pipelines: bool = True,
+    run_dataset_validator: bool = True,
 ) -> bool:
     """Per-session pipeline validation + dataset-wide BIDS Validator.
 
@@ -634,6 +665,12 @@ def validate_jobs(
         (typical intracranial).
     verbose : bool
         Forwarded to the eeg-validation pipelines.
+    run_eeg_pipelines, run_dataset_validator : bool
+        Toggle the heavy work: when ``run_eeg_pipelines`` is False the
+        per-session loop still runs (so per-session error CSVs are
+        written) but the eeg-validation pipelines are skipped. When
+        ``run_dataset_validator`` is False the official BIDS Validator
+        run at the end is skipped. Defaults to both True.
     """
     overall_ok = True
     seen_roots: Dict[str, str] = {}  # root -> experiment label (for top-level log path)
@@ -646,43 +683,47 @@ def validate_jobs(
         log_dir = session_log_dir(exp, subj, sess)
         tag = session_tag(subj, exp, sess)
 
+        # Always write the per-session error CSV slice — cheap, useful,
+        # independent of whether pipelines run.
         write_session_error_csv(error_logs.get(exp), subj, sess, log_dir, tag)
 
-        with tee_to_file(os.path.join(log_dir, f"{tag}_bids_validation.txt"), mode="w"):
-            print(f"Validation: {tag}")
-            print(SECTION_RULE)
-            print()
-            if intracranial:
-                ok = run_intra_validation(
-                    subj, exp, sess, root,
-                    out_dir=log_dir,
-                    localization=localization_for_job(row) if localization_for_job else None,
-                    montage=montage_for_job(row) if montage_for_job else None,
-                    verbose=verbose,
-                )
-            else:
-                ok = run_scalp_validation(
-                    subj, exp, sess, root,
-                    out_dir=log_dir, verbose=verbose,
-                )
+        if run_eeg_pipelines:
+            with tee_to_file(os.path.join(log_dir, f"{tag}_bids_validation.txt"), mode="w"):
+                print(f"Validation: {tag}")
+                print(SECTION_RULE)
+                print()
+                if intracranial:
+                    ok = run_intra_validation(
+                        subj, exp, sess, root,
+                        out_dir=log_dir,
+                        localization=localization_for_job(row) if localization_for_job else None,
+                        montage=montage_for_job(row) if montage_for_job else None,
+                        verbose=verbose,
+                    )
+                else:
+                    ok = run_scalp_validation(
+                        subj, exp, sess, root,
+                        out_dir=log_dir, verbose=verbose,
+                    )
+            overall_ok = overall_ok and ok
 
         seen_roots[root] = exp
-        overall_ok = overall_ok and ok
 
     # Dataset-wide BIDS validator. One run per unique (root[, experiment]).
-    if log_root_per_experiment:
-        # Scalp: one root per experiment; one log file per experiment.
-        for root, exp in seen_roots.items():
-            top = os.path.join(LOG_ROOT, str(exp), "_bids_validator.txt")
-            with tee_to_file(top, mode="w"):
-                overall_ok = run_bids_validator(root) and overall_ok
-    else:
-        # Intracranial: one shared root across experiments. One log per root,
-        # filed under whichever experiment we saw first (purely for layout).
-        for root, exp in seen_roots.items():
-            top = os.path.join(LOG_ROOT, str(exp), "_bids_validator.txt")
-            with tee_to_file(top, mode="w"):
-                overall_ok = run_bids_validator(root) and overall_ok
-            break  # one root for all experiments
+    if run_dataset_validator:
+        if log_root_per_experiment:
+            # Scalp: one root per experiment; one log file per experiment.
+            for root, exp in seen_roots.items():
+                top = os.path.join(LOG_ROOT, str(exp), "_bids_validator.txt")
+                with tee_to_file(top, mode="w"):
+                    overall_ok = run_bids_validator(root) and overall_ok
+        else:
+            # Intracranial: one shared root across experiments. One log per root,
+            # filed under whichever experiment we saw first (purely for layout).
+            for root, exp in seen_roots.items():
+                top = os.path.join(LOG_ROOT, str(exp), "_bids_validator.txt")
+                with tee_to_file(top, mode="w"):
+                    overall_ok = run_bids_validator(root) and overall_ok
+                break  # one root for all experiments
 
     return overall_ok

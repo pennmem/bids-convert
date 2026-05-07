@@ -310,14 +310,28 @@ def _run_convert_with_tee(subject, experiment, session, **kwargs):
     return result
 
 
+def _resolve_validation_flags(args):
+    """Return (run_eeg_pipelines, run_dataset_validator) based on the CLI
+    flags. If neither --bids-validator nor --eeg-validator was passed,
+    --validate / --validate-only mean "both" (backward-compat)."""
+    eeg = bool(getattr(args, "eeg_validator", False))
+    bids = bool(getattr(args, "bids_validator", False))
+    if eeg or bids:
+        return eeg, bids
+    return True, True
+
+
 def validate_bids(args, df_jobs, error_logs):
-    """Run per-session eeg-validation pipelines, then dataset-wide BIDS Validator."""
+    """Run per-session eeg-validation pipelines and/or dataset-wide BIDS Validator."""
+    run_eeg, run_bids = _resolve_validation_flags(args)
     return validate_jobs(
         df_jobs,
         bids_root_for_job=lambda row: args.root,
         error_logs=error_logs,
         intracranial=True,
         log_root_per_experiment=False,
+        run_eeg_pipelines=run_eeg,
+        run_dataset_validator=run_bids,
     )
 
 
@@ -369,9 +383,17 @@ examples:
     ap.add_argument("--serial", action="store_true", default=False,
                     help="Run jobs sequentially instead of parallel (Dask).")
     ap.add_argument("--validate", action="store_true", default=False,
-                    help="Run BIDS validation on the output directory after conversion.")
+                    help="Run both validations after conversion (alias for "
+                         "--bids-validator --eeg-validator).")
+    ap.add_argument("--bids-validator", dest="bids_validator", action="store_true",
+                    default=False,
+                    help="Run the official BIDS Validator only (path/naming + npm CLI).")
+    ap.add_argument("--eeg-validator", dest="eeg_validator", action="store_true",
+                    default=False,
+                    help="Run the eeg-validation pipelines only (CMLReader vs BIDS).")
     ap.add_argument("--validate-only", action="store_true", default=False,
-                    help="Skip conversion and only run BIDS validation on --root.")
+                    help="Skip conversion and only run validation on --root. "
+                         "Combine with --bids-validator / --eeg-validator to scope.")
 
     # Job filtering
     ap.add_argument("--max-subjects", type=int, default=10,
@@ -506,7 +528,7 @@ examples:
             log.flush()
 
         print(f"\nDone. ok={n_ok} fail={n_fail}")
-        if args.validate:
+        if args.validate or args.bids_validator or args.eeg_validator:
             df_validate = pd.DataFrame(
                 converted_rows, columns=['subject', 'experiment', 'session'],
             )
@@ -569,7 +591,7 @@ examples:
         log.flush()
 
     print(f"Done. ok={n_ok} fail={n_fail}")
-    if args.validate:
+    if args.validate or args.bids_validator or args.eeg_validator:
         df_validate = pd.DataFrame(
             converted_rows, columns=['subject', 'experiment', 'session'],
         )

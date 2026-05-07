@@ -159,14 +159,28 @@ def _convert_to_bids_inner(subject, experiment, session, root, overwrite_eeg,
     }
 
 
+def _resolve_validation_flags(args):
+    """Return (run_eeg_pipelines, run_dataset_validator) based on the CLI
+    flags. If neither --bids-validator nor --eeg-validator was passed,
+    --validate / --validate-only mean "both" (backward-compat)."""
+    eeg = bool(getattr(args, "eeg_validator", False))
+    bids = bool(getattr(args, "bids_validator", False))
+    if eeg or bids:
+        return eeg, bids
+    return True, True
+
+
 def validate_bids(args, df_jobs, error_logs):
-    """Run per-session eeg-validation pipelines, then dataset-wide BIDS Validator."""
+    """Run per-session eeg-validation pipelines and/or dataset-wide BIDS Validator."""
+    run_eeg, run_bids = _resolve_validation_flags(args)
     return validate_jobs(
         df_jobs,
         bids_root_for_job=lambda row: args.root + f"/{row['experiment']}/",
         error_logs=error_logs,
         intracranial=False,
         log_root_per_experiment=True,
+        run_eeg_pipelines=run_eeg,
+        run_dataset_validator=run_bids,
     )
 
 
@@ -219,16 +233,33 @@ def parse_args():
         "--validate",
         action="store_true",
         default=False,
-        help="Run BIDS validation (eeg-validation pipelines + BIDS Validator) "
-             "after conversion completes.",
+        help="Run both validations after conversion (alias for "
+             "--bids-validator --eeg-validator).",
+    )
+
+    parser.add_argument(
+        "--bids-validator",
+        dest="bids_validator",
+        action="store_true",
+        default=False,
+        help="Run the official BIDS Validator only (path/naming + npm CLI).",
+    )
+
+    parser.add_argument(
+        "--eeg-validator",
+        dest="eeg_validator",
+        action="store_true",
+        default=False,
+        help="Run the eeg-validation pipelines only (CMLReader vs BIDS).",
     )
 
     parser.add_argument(
         "--validate-only",
         action="store_true",
         default=False,
-        help="Skip conversion and only run BIDS validation on --root for the "
-             "selected jobs.",
+        help="Skip conversion and only run validation on --root for the "
+             "selected jobs. Combine with --bids-validator / --eeg-validator "
+             "to scope.",
     )
 
     parser.add_argument(
@@ -472,7 +503,7 @@ if __name__ == "__main__":
     for log in error_logs.values():
         log.flush()
 
-    if args.validate:
+    if args.validate or args.bids_validator or args.eeg_validator:
         df_validate = pd.DataFrame(
             converted_rows, columns=['subject', 'experiment', 'session'],
         )
