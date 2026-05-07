@@ -1183,9 +1183,56 @@ class intracranial_BIDS_converter:
 
     # ----------------------------------------
     # run conversion
+    def _ensure_dataset_description(self):
+        """Write a minimal BIDS-compliant dataset_description.json at the
+        BIDS root if one isn't already there. Idempotent — never overwrites
+        a customised version."""
+        path = os.path.join(self.root, 'dataset_description.json')
+        if os.path.exists(path):
+            return
+        os.makedirs(self.root, exist_ok=True)
+        body = {
+            "Name": f"{self.experiment} intracranial EEG (CML pennmem/bids-convert)",
+            "BIDSVersion": "1.10.0",
+            "DatasetType": "raw",
+            "Authors": ["[Unspecified]"],
+        }
+        with open(path, 'w') as f:
+            json.dump(body, f, indent=4)
+            f.write('\n')
+
+    def _ensure_readme(self):
+        """Write a minimal BIDS-compliant README at the BIDS root if missing.
+        Idempotent — never overwrites a customised README."""
+        path = os.path.join(self.root, 'README')
+        if os.path.exists(path):
+            return
+        os.makedirs(self.root, exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(
+                "References\n"
+                "----------\n"
+                "Holdgraf, C., Appelhoff, S., Bickel, S., Bouchard, K., D'Ambrosio, S., "
+                "David, O., ... & Hermes, D. (2019). iEEG-BIDS, extending the Brain "
+                "Imaging Data Structure specification to human intracranial "
+                "electrophysiology. Scientific Data, 6(1), 102. "
+                "https://doi.org/10.1038/s41597-019-0105-7\n\n"
+                "Appelhoff, S., Sanderson, M., Brooks, T., Vliet, M., Quentin, R., "
+                "Holdgraf, C., Chaumon, M., Mikulan, E., Tavabi, K., Höchenberger, R., "
+                "Welke, D., Brunner, C., Rockhill, A., Larson, E., Gramfort, A. and "
+                "Jas, M. (2019). MNE-BIDS: Organizing electrophysiological data into "
+                "the BIDS format and facilitating their analysis. Journal of Open "
+                "Source Software 4: (1896). https://doi.org/10.21105/joss.01896\n"
+            )
+
     def run(self):
         self.reader = self.cml_reader()
         self.stage_outcomes = {s: 'not_run' for s in self.ALL_STAGES}
+
+        # Root-level required/recommended BIDS files. Idempotent — won't
+        # overwrite a customised dataset_description.json or README.
+        self._ensure_dataset_description()
+        self._ensure_readme()
 
         print(f"DEBUG: overrides={self.overrides} root={self.root} session_dir={self._session_dir('ieeg')}")
 
