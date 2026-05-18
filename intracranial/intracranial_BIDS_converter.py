@@ -176,7 +176,7 @@ class intracranial_BIDS_converter:
         events = self.reader.load('events')
         sv = getattr(self, 'system_version', None)
         if sv == 4:
-            from .fix_heartbeats_sys4 import fix_heartbeats_for_session
+            from heartbeat.fix_heartbeats_sys4 import fix_heartbeats_for_session
             events, hb_status = fix_heartbeats_for_session(
                 self.subject, self.experiment, self.session, events,
             )

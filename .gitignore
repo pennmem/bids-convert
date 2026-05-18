@@ -1,6 +1,7 @@
 slurm*
 .ipynb_checkpoints*
 *.cpython*
+heartbeat/results/*
 
 # don't track DS_store
 .DS_store

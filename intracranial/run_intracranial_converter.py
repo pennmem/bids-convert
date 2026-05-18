@@ -405,7 +405,7 @@ examples:
 
     # Parallel (Dask) args
     ap.add_argument("--job-name", default="bids_convert")
-    ap.add_argument("--memory-per-job", default="50GB")
+    ap.add_argument("--memory-per-job", default="100GB")
     ap.add_argument("--max-n-jobs", type=int, default=10)
     ap.add_argument("--threads-per-job", type=int, default=1)
     ap.add_argument("--adapt", action="store_true", default=True)
