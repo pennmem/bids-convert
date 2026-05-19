@@ -429,19 +429,31 @@ def _keep_clean_winners(df, group_cols, quality_col, ratio):
 def filter_unambiguous(agg_per_exp,
                        pearson_threshold=AMBIG_PEARSON_THRESHOLD_DEFAULT,
                        quality_ratio=AMBIG_QUALITY_RATIO_DEFAULT,
-                       force_keep=None):
+                       force_keep=None,
+                       min_session_frac=None,
+                       min_median_n_pairs=None):
     """Drop ambiguous candidate pairings.
 
     A pair survives iff it's the clean best for its task_type AND for
     its host_type (both sides agree).
 
     Same-name pairs (task_type == host_type) are always kept,
-    regardless of pearson or ambiguity filtering.
+    regardless of pearson or ambiguity filtering -- but they are still
+    subject to `min_session_frac` and `min_median_n_pairs` if those are
+    set.
 
     `force_keep` is an optional iterable of (experiment, task_type,
     host_type) tuples that should also be kept regardless of pearson or
     ambiguity filtering. Forced pairs are added to `unambiguous` with
-    `dropped_by` left blank and never appear in `dropped`.
+    `dropped_by` left blank and never appear in `dropped`. Forced pairs
+    bypass the session/event thresholds.
+
+    `min_session_frac`: drop candidates whose `session_frac` (fraction of
+    qualifying sessions in the experiment in which the pair appeared) is
+    below this. `None` disables the check.
+    `min_median_n_pairs`: drop candidates whose `median_n_pairs` (median
+    valid event count per session) is below this. `None` disables.
+    Both filters apply to same-name pairs too. Forced pairs bypass them.
 
     Returns (unambiguous, dropped) DataFrames.
     """
@@ -452,12 +464,25 @@ def filter_unambiguous(agg_per_exp,
     key_cols = ['experiment', 'task_type', 'host_type']
     keys = list(zip(*[agg_per_exp[c] for c in key_cols]))
     is_same_name = agg_per_exp['task_type'] == agg_per_exp['host_type']
-    is_forced = pd.Series([k in force_set for k in keys],
-                          index=agg_per_exp.index) | is_same_name
+    is_forced_only = pd.Series([k in force_set for k in keys],
+                               index=agg_per_exp.index)
+    is_forced = is_forced_only | is_same_name
 
     credible = agg_per_exp[
         (agg_per_exp['median_pearson'] >= pearson_threshold) | is_forced
     ].copy()
+
+    # Session/event-count thresholds. Forced-by-name (force_keep) bypass
+    # these; same-name candidates do not.
+    forced_only_in_credible = is_forced_only.loc[credible.index]
+    below_threshold = pd.Series(False, index=credible.index)
+    if min_session_frac is not None and 'session_frac' in credible.columns:
+        below_threshold |= credible['session_frac'] < min_session_frac
+    if min_median_n_pairs is not None and 'median_n_pairs' in credible.columns:
+        below_threshold |= credible['median_n_pairs'] < min_median_n_pairs
+    below_threshold &= ~forced_only_in_credible
+    thresh_dropped = credible[below_threshold].copy()
+    credible = credible[~below_threshold]
 
     task_clean = _keep_clean_winners(credible, ['experiment', 'task_type'],
                                      'median_err_std_before', quality_ratio)
@@ -479,6 +504,10 @@ def filter_unambiguous(agg_per_exp,
         'task_type ambiguous (or not best)')
     dropped.loc[~not_task &  not_host, 'dropped_by'] = (
         'host_type ambiguous (or not best)')
+
+    if not thresh_dropped.empty:
+        thresh_dropped['dropped_by'] = 'below min_session_frac/min_median_n_pairs'
+        dropped = pd.concat([dropped, thresh_dropped], ignore_index=False)
 
     missing = force_set - set(keys)
     if missing:
@@ -874,13 +903,15 @@ def _rep_session_for_experiment(ok_exp, exp_candidates,
     return items[len(items) // 2][0]
 
 
-def plot_slope_distribution(corrections_eval, unambiguous):
+def plot_slope_distribution(corrections_eval, unambiguous, *, anchor=None):
     """Per-experiment slope distribution histograms.
 
-    One figure per experiment, with rows = candidates of that experiment.
-    Each subplot histograms the slopes across all sessions where the
-    candidate has fit data. Vertical dashed line at slope=1 marks the
-    no-drift reference.
+    Without `anchor`, one row per candidate of that experiment, each
+    histogramming that candidate's per-session NH fit slopes.
+
+    With `anchor=(task_type, host_type)`, only the anchor candidate's slopes
+    are shown — one histogram per experiment, since the anchor's per-session
+    slope is the one being applied to every other message type downstream.
     """
     if corrections_eval.empty or unambiguous.empty:
         print('No corrections_eval / unambiguous - nothing to plot.')
@@ -892,6 +923,14 @@ def plot_slope_distribution(corrections_eval, unambiguous):
         on=['experiment', 'task_type', 'host_type']
     )[['experiment', 'task_type', 'host_type']].drop_duplicates() \
         .sort_values(['experiment', 'task_type']).reset_index(drop=True)
+
+    if anchor is not None:
+        a_task, a_host = anchor
+        candidates = candidates[(candidates['task_type'] == a_task) &
+                                (candidates['host_type'] == a_host)]
+        if candidates.empty:
+            print(f'No anchor {anchor!r} in candidates - nothing to plot.')
+            return
 
     if candidates.empty:
         print('No candidates have fit data.')
@@ -910,8 +949,10 @@ def plot_slope_distribution(corrections_eval, unambiguous):
             ax.axvline(1.0, color='k', linestyle='--', linewidth=0.7)
             ax.set_xlabel('regression slope')
             ax.set_ylabel('# sessions')
+            anchor_tag = '  (anchor — applied to all messages)' if anchor is not None else ''
             ax.set_title(
-                f'{c["task_type"]} <-> {c["host_type"]}  (n_sess={len(sel)})',
+                f'{c["task_type"]} <-> {c["host_type"]}  '
+                f'(n_sess={len(sel)}){anchor_tag}',
                 fontsize=10)
             ax.grid(alpha=0.3)
         fig.suptitle(
@@ -1320,50 +1361,128 @@ def compute_per_candidate_vs_gt(unambiguous, session_event_cache, gt_corrections
     return out
 
 
-def plot_per_candidate_vs_gt(per_cand_data, *,
+def plot_per_candidate_vs_gt(event_residuals, residual_summary, top_candidates,
+                             *, abs_threshold_ms=20,
                              save=True, save_dir=HEARTBEAT_DIR):
-    """Per-candidate 2-panel figure (paired events + GT regression line,
-    residuals histogram) from precomputed `per_cand_data` (output of
-    compute_per_candidate_vs_gt). Plotting only — no math."""
-    if not per_cand_data:
-        print('No per_cand_data - nothing to plot.')
+    """Per-FIT-candidate 3-panel residual-vs-time scatter (before / after_all /
+    after_outliers), one representative session per fit candidate.
+
+    Each panel scatters per-event residuals (corrected_h - GT line) against
+    event time, relative to the rep session's first event. y=0 is the heartbeat
+    fit line. Markers are colored by the EVENT candidate (event type) so a
+    single panel shows how the chosen FIT generalizes across event types.
+
+    Rep session: the median-`rms` session in `residual_summary` for that fit
+    candidate × `condition='after_all'`, pooling event types.
+    """
+    if (event_residuals is None or event_residuals.empty or
+            residual_summary is None or residual_summary.empty):
+        print('No data - nothing to plot.')
+        return []
+
+    fit_keys = (event_residuals[['experiment', 'fit_task_type', 'fit_host_type']]
+                .drop_duplicates())
+    if top_candidates is not None and not top_candidates.empty:
+        tc = top_candidates[['experiment', 'task_type', 'host_type']] \
+                .rename(columns={'task_type': 'fit_task_type',
+                                 'host_type': 'fit_host_type'})
+        fit_keys = fit_keys.merge(tc,
+                                  on=['experiment', 'fit_task_type', 'fit_host_type'],
+                                  how='inner')
+    if fit_keys.empty:
+        print('No fit candidates to plot.')
         return []
 
     saved_paths = []
-    for d in per_cand_data:
-        # Build the shapes plot_pair_with_fit / plot_residuals expect.
-        gt_fit = {
-            'slope':     d['gt_slope'],
-            'offset':    d['gt_offset'],
-            'task_type': d['task_type'],
-            'host_type': d['host_type'],
-            'label':     'GT',
-        }
-        recalc = {
-            't':                   d['t'],
-            'h':                   d['corrected_h'],
-            'residuals':           d['residuals'],
-            'in_band':             d['in_band'],
-            'rms_inliers':         d['rms_inliers'],
-            'inlier_threshold_ms': d['inlier_threshold_ms'],
-        }
-        fig, axes = plt.subplots(1, 2, figsize=(14, 4.5))
-        plot_pair_with_fit(gt_fit, recalc, ax=axes[0])
-        plot_residuals(recalc, ax=axes[1])
+    for _, fk in fit_keys.iterrows():
+        # Rep session: median rms across all (event_type, session) rows in
+        # residual_summary for this fit candidate × after_all.
+        fit_summary = residual_summary[
+            (residual_summary['experiment']    == fk['experiment']) &
+            (residual_summary['fit_task_type'] == fk['fit_task_type']) &
+            (residual_summary['fit_host_type'] == fk['fit_host_type']) &
+            (residual_summary['condition']     == 'after_all')
+        ].dropna(subset=['rms'])
+        if fit_summary.empty:
+            continue
+        # One per-session rms by averaging across event types.
+        per_sess = (fit_summary.groupby(['subject', 'session'])['rms']
+                    .mean().reset_index().sort_values('rms').reset_index(drop=True))
+        rep_row  = per_sess.iloc[len(per_sess) // 2]
+        rep_sub  = rep_row['subject']
+        rep_sess = int(rep_row['session'])
+
+        sess_events = event_residuals[
+            (event_residuals['experiment']    == fk['experiment']) &
+            (event_residuals['fit_task_type'] == fk['fit_task_type']) &
+            (event_residuals['fit_host_type'] == fk['fit_host_type']) &
+            (event_residuals['subject']       == rep_sub)            &
+            (event_residuals['session']       == rep_sess)
+        ]
+        if sess_events.empty:
+            continue
+
+        t0 = float(sess_events['t'].min())
+        evt_types = sess_events[['task_type', 'host_type']].drop_duplicates() \
+                       .reset_index(drop=True)
+        cmap = plt.get_cmap('tab10')
+
+        fig, axes = plt.subplots(1, 3, figsize=(16, 4.5),
+                                 sharex=True, sharey=True)
+        for ax, cond, panel_label in (
+            (axes[0], 'before',         'before'),
+            (axes[1], 'after_all',      'all events'),
+            (axes[2], 'after_outliers', 'outliers only'),
+        ):
+            panel = sess_events.query("condition == @cond")
+            if panel.empty:
+                ax.set_title(f'{panel_label}  (no events)')
+                continue
+            for i, ev in evt_types.iterrows():
+                evt = panel[(panel['task_type'] == ev['task_type']) &
+                            (panel['host_type'] == ev['host_type'])]
+                if evt.empty:
+                    continue
+                tt = (evt['t'].to_numpy() - t0) / 1000.0
+                rr = evt['residual_ms'].to_numpy()
+                is_inlier = evt['is_inlier_nh'].to_numpy(dtype=bool)
+                color = cmap(i % 10)
+                lbl = f'{ev["task_type"]}/{ev["host_type"]}'
+                if is_inlier.any():
+                    ax.scatter(tt[is_inlier], rr[is_inlier], s=18,
+                               color=color, alpha=0.6, label=lbl)
+                if (~is_inlier).any():
+                    ax.scatter(tt[~is_inlier], rr[~is_inlier], s=28,
+                               color=color, alpha=0.85, marker='x',
+                               linewidths=1.0)
+            ax.axhline(0, color='k', linestyle='--', alpha=0.6)
+            ax.axhline( abs_threshold_ms, color='r', linestyle=':', alpha=0.4)
+            ax.axhline(-abs_threshold_ms, color='r', linestyle=':', alpha=0.4)
+            ax.set_xlabel('event time within session (s)')
+            r_all = panel['residual_ms'].to_numpy()
+            std = float(r_all.std(ddof=1)) if r_all.size > 1 else float('nan')
+            pct = 100 * (np.abs(r_all) > abs_threshold_ms).sum() / r_all.size
+            ax.set_title(f'{panel_label}  '
+                         f'(n={r_all.size}, std={std:.2f} ms, '
+                         f'{pct:.1f}% > {abs_threshold_ms} ms)')
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend(fontsize=7, loc='best', title='event type')
+            ax.grid(alpha=0.3)
+        axes[0].set_ylabel('residual vs heartbeat fit (ms)')
+
         fig.suptitle(
-            f'Residuals vs HEARTBEATs After Fixing {d["mode"]}\n'
-            f'{d["experiment"]}  |  {d["task_type"]} <-> {d["host_type"]}  |  '
-            f'ses: {d["subject"]}/{d["session"]}  |  ',
+            f'Residuals vs heartbeat fit — rep session  |  '
+            f'fit on {fk["fit_task_type"]} <-> {fk["fit_host_type"]}  |  '
+            f'{fk["experiment"]}  |  ses: {rep_sub}/{rep_sess}',
             fontsize=12, y=1.02)
         plt.tight_layout()
 
         if save:
             sub_dir = os.path.join(save_dir, 'per_candidate_vs_gt')
-            name = (f'{_safe_name(d["experiment"])}_'
-                    f'{_safe_name(d["task_type"])}_'
-                    f'{_safe_name(d["host_type"])}_'
-                    f'{_safe_name(d["subject"])}_ses{d["session"]}_'
-                    f'{d["mode"]}')
+            name = (f'{_safe_name(fk["experiment"])}_fit_'
+                    f'{_safe_name(fk["fit_task_type"])}_'
+                    f'{_safe_name(fk["fit_host_type"])}_'
+                    f'{_safe_name(rep_sub)}_ses{rep_sess}')
             saved_paths.append(_save_fig(fig, name, save_dir=sub_dir))
         plt.show()
     return saved_paths
@@ -1558,16 +1677,32 @@ def aggregate_modes_per_session(per_cand_all, per_cand_out, top_candidates):
     return pd.DataFrame(rows)
 
 
+def _coerce_mode_long(df):
+    """Accept either `long_df` (with `mode`) or `residual_summary` (with
+    `condition`) and return a frame in the legacy `long_df` shape that the
+    paired-mode comparison helpers consume."""
+    if df is None or df.empty:
+        return df
+    if 'mode' in df.columns:
+        return df
+    if 'condition' in df.columns:
+        return _residual_summary_to_mode_long(df)
+    return df
+
+
 def paired_wilcoxon_per_candidate(long_df, stat_col):
     """Per-candidate paired Wilcoxon signed-rank between modes.
 
-    Pivots `long_df` (from aggregate_modes_per_session) on `mode`, keys
-    by (subject, session), keeps only sessions present in BOTH modes,
-    then runs scipy.stats.wilcoxon on `stat_col`.
+    Accepts either the legacy `long_df` (with `mode`) or a `residual_summary`
+    (with `condition`); the latter is auto-coerced to the legacy shape.
+
+    Pivots on `mode`, keys by (subject, session), keeps only sessions present
+    in BOTH modes, then runs scipy.stats.wilcoxon on `stat_col`.
 
     Returns DataFrame: experiment, task_type, host_type, n_paired,
     all_events_mean, outliers_only_mean, statistic, pvalue.
     """
+    long_df = _coerce_mode_long(long_df)
     if long_df is None or long_df.empty or stat_col not in long_df.columns:
         return pd.DataFrame()
 
@@ -1609,6 +1744,82 @@ def paired_wilcoxon_per_candidate(long_df, stat_col):
     return pd.DataFrame(out)
 
 
+def paired_wilcoxon_all_pairs(long_df, stat_col, pairs=None):
+    """Per-(fit_candidate, event_candidate) paired Wilcoxon signed-rank for
+    ALL pairwise mode pairs.
+
+    Same input flexibility as `paired_wilcoxon_per_candidate` — accepts either
+    `long_df` (with `mode`) or a `residual_summary` (with `condition`); the
+    latter is auto-coerced.
+
+    If the input has `fit_task_type`/`fit_host_type` columns (post-anchor-drop
+    residual_summary shape), the grouping key includes them — so you get one
+    row per (fit, event, mode_a, mode_b). If absent, falls back to the
+    single-key (experiment, task_type, host_type) grouping.
+
+    `pairs` is an iterable of (mode_a, mode_b) tuples. When omitted, every
+    unordered pair of modes present in the input is tested.
+
+    Returns a long DataFrame, one row per (group, pair):
+        experiment, [fit_task_type, fit_host_type,] task_type, host_type,
+        mode_a, mode_b, n_paired, mode_a_mean, mode_b_mean, statistic, pvalue.
+    """
+    long_df = _coerce_mode_long(long_df)
+    if long_df is None or long_df.empty or stat_col not in long_df.columns:
+        return pd.DataFrame()
+
+    has_fit_cols = ('fit_task_type' in long_df.columns
+                    and 'fit_host_type' in long_df.columns)
+    group_keys = (['experiment', 'fit_task_type', 'fit_host_type',
+                   'task_type', 'host_type']
+                  if has_fit_cols
+                  else ['experiment', 'task_type', 'host_type'])
+
+    if pairs is None:
+        modes = list(long_df['mode'].drop_duplicates())
+        pairs = [(modes[i], modes[j])
+                 for i in range(len(modes))
+                 for j in range(i + 1, len(modes))]
+    pairs = list(pairs)
+
+    out = []
+    for keys, grp in long_df.groupby(group_keys, sort=False):
+        keys = keys if isinstance(keys, tuple) else (keys,)
+        wide = grp.pivot_table(index=['subject', 'session'],
+                               columns='mode', values=stat_col,
+                               aggfunc='first')
+        for ma, mb in pairs:
+            if ma not in wide.columns or mb not in wide.columns:
+                continue
+            paired = wide[[ma, mb]].dropna()
+            n = len(paired)
+            if n < 1:
+                continue
+            a = paired[ma].to_numpy()
+            b = paired[mb].to_numpy()
+            stat = float('nan')
+            pval = float('nan')
+            if n >= 2 and not np.all(a == b):
+                try:
+                    res = stats.wilcoxon(a, b, zero_method='wilcox')
+                    stat = float(res.statistic)
+                    pval = float(res.pvalue)
+                except ValueError:
+                    pass
+            row = dict(zip(group_keys, keys))
+            row.update({
+                'mode_a':      ma,
+                'mode_b':      mb,
+                'n_paired':    n,
+                'mode_a_mean': float(np.mean(a)),
+                'mode_b_mean': float(np.mean(b)),
+                'statistic':   stat,
+                'pvalue':      pval,
+            })
+            out.append(row)
+    return pd.DataFrame(out)
+
+
 def _sig_stars(p):
     """Significance stars for a p-value."""
     if p is None or not np.isfinite(p):
@@ -1636,48 +1847,132 @@ def _fmt_val(v):
     return f'{v:.3f}'
 
 
+_DEFAULT_BAR_SERIES = (
+    # (mode_name, matplotlib color, legend label)
+    # Shared color convention across all calc-section plots:
+    #   before          → C0 blue
+    #   all_events      → C1 orange
+    #   outliers_only   → C2 green
+    ('before',        'C0', 'before'),
+    ('all_events',    'C1', 'all_events'),
+    ('outliers_only', 'C2', 'outliers_only'),
+)
+
+
 def _paired_mode_bars(ax, exp_df, cands, stat_col, wilco, exp,
-                     labels, title, ylab):
-    """Helper: draw paired blue/orange bars per candidate with Wilcoxon
-    significance stars from the precomputed `wilco` DataFrame."""
-    blue_means = []
-    orange_means = []
-    stars = []
+                     labels, title, ylab, series=_DEFAULT_BAR_SERIES):
+    """Helper: draw grouped per-candidate bars (one bar per mode in `series`)
+    plus paired-Wilcoxon significance markers from `wilco`.
+
+    `wilco` accepts two shapes:
+      - Legacy single-pair (from `paired_wilcoxon_per_candidate`): one row per
+        candidate with a `pvalue` column. A single star marker is centered
+        over the cluster.
+      - Multi-pair (from `paired_wilcoxon_all_pairs`): one row per
+        (candidate, mode_a, mode_b) with `mode_a`, `mode_b`, `pvalue` columns.
+        A bracket with stars is drawn between every pair's two bars.
+
+    `series` is an iterable of (mode_name, color, legend_label) tuples. Modes
+    missing from `exp_df` produce a NaN bar (drawn as nothing).
+    """
+    series = list(series)
+    n_series = len(series)
+    mode_names = [m for (m, _c, _l) in series]
+    mode_to_idx = {m: i for i, m in enumerate(mode_names)}
+
+    # Per-mode means across sessions, per candidate.
+    means = {m: [] for m in mode_names}
     for t, h in cands:
         sub = exp_df[(exp_df['task_type'] == t) & (exp_df['host_type'] == h)]
-        blue_means.append(float(sub.loc[sub['mode'] == 'all_events', stat_col].mean()))
-        orange_means.append(float(sub.loc[sub['mode'] == 'outliers_only', stat_col].mean()))
-        w = wilco[(wilco['experiment'] == exp) &
-                  (wilco['task_type']  == t) &
-                  (wilco['host_type']  == h)]
-        stars.append(_sig_stars(w['pvalue'].iloc[0]) if not w.empty else '')
+        for m in mode_names:
+            vals = sub.loc[sub['mode'] == m, stat_col]
+            means[m].append(float(vals.mean()) if len(vals) else float('nan'))
 
-    x = np.arange(len(cands))
-    bw = 0.4
-    ax.bar(x - bw/2, blue_means,   width=bw, color='C0', label='all_events')
-    ax.bar(x + bw/2, orange_means, width=bw, color='C1', label='outliers_only')
+    x  = np.arange(len(cands))
+    bw = 0.8 / n_series                         # group fits within one unit
+    offsets = (np.arange(n_series) - (n_series - 1) / 2.0) * bw
 
-    arr = np.array(blue_means + orange_means, dtype=float)
+    for (m, color, lbl), off in zip(series, offsets):
+        ax.bar(x + off, means[m], width=bw, color=color, label=lbl)
+
+    arr = np.array([v for m in means.values() for v in m], dtype=float)
     finite = arr[np.isfinite(arr)]
-    if finite.size:
-        ymax = max(float(finite.max()), 0.0)
-        ymin = min(float(finite.min()), 0.0)
-        yrange = (ymax - ymin) if ymax > ymin else max(abs(ymax), 1.0)
+    if not finite.size:
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
+        ax.set_ylabel(ylab); ax.set_title(title)
+        ax.legend(fontsize=9); ax.grid(alpha=0.3, axis='y')
+        return
+
+    ymax = max(float(finite.max()), 0.0)
+    ymin = min(float(finite.min()), 0.0)
+    yrange = (ymax - ymin) if ymax > ymin else max(abs(ymax), 1.0)
+
+    # Per-bar value labels next to each bar.
+    for i in range(len(cands)):
+        for (m, color, _lbl), off in zip(series, offsets):
+            v = means[m][i]
+            if not np.isfinite(v):
+                continue
+            voffset = 0.02 * yrange if v >= 0 else -0.02 * yrange
+            ax.text(i + off, v + voffset, _fmt_val(v),
+                    ha='center', va='bottom' if v >= 0 else 'top',
+                    fontsize=7, color=color)
+
+    multi_pair = (wilco is not None
+                  and hasattr(wilco, 'columns')
+                  and 'mode_a' in wilco.columns
+                  and 'mode_b' in wilco.columns)
+
+    if multi_pair:
+        bracket_h = 0.04 * yrange
+        gap       = 0.06 * yrange
+        max_y     = ymax
+        for i, (t, h) in enumerate(cands):
+            cluster = wilco[(wilco['experiment'] == exp) &
+                            (wilco['task_type']  == t) &
+                            (wilco['host_type']  == h)]
+            if cluster.empty:
+                continue
+            tops_i = [means[m][i] for m in mode_names if np.isfinite(means[m][i])]
+            if not tops_i:
+                continue
+            y_base = max(tops_i) + gap
+            # Sort brackets short-to-long so wider brackets stack on top.
+            rows_sorted = sorted(
+                (r for r in cluster.itertuples(index=False)
+                 if r.mode_a in mode_to_idx and r.mode_b in mode_to_idx),
+                key=lambda r: abs(mode_to_idx[r.mode_b] - mode_to_idx[r.mode_a]))
+            for j, row in enumerate(rows_sorted):
+                ia, ib = mode_to_idx[row.mode_a], mode_to_idx[row.mode_b]
+                x1, x2 = i + offsets[ia], i + offsets[ib]
+                if x1 > x2:
+                    x1, x2 = x2, x1
+                y_bot = y_base + j * (bracket_h + gap)
+                ax.plot([x1, x1, x2, x2],
+                        [y_bot, y_bot + bracket_h, y_bot + bracket_h, y_bot],
+                        lw=1.0, color='k')
+                stars = _sig_stars(row.pvalue) or 'ns'
+                ax.text((x1 + x2) / 2, y_bot + bracket_h, stars,
+                        ha='center', va='bottom', fontsize=9, fontweight='bold')
+                max_y = max(max_y, y_bot + bracket_h)
+        ax.set_ylim(ymin - 0.10 * yrange, max_y + 0.10 * yrange)
+    else:
+        # Legacy single-pair Wilcoxon: one star per cluster.
         ax.set_ylim(ymin - 0.10 * yrange, ymax + 0.25 * yrange)
-        for i, (b, o) in enumerate(zip(blue_means, orange_means)):
-            for v, dx, color in ((b, -bw/2, 'C0'), (o, bw/2, 'C1')):
-                if not np.isfinite(v):
-                    continue
-                offset = 0.02 * yrange if v >= 0 else -0.02 * yrange
-                ax.text(i + dx, v + offset, _fmt_val(v),
-                        ha='center', va='bottom' if v >= 0 else 'top',
-                        fontsize=7, color=color)
-        for i, s in enumerate(stars):
-            top = max(blue_means[i], orange_means[i])
-            if not np.isfinite(top):
-                top = 0.0
-            ax.text(i, top + 0.12 * yrange, s, ha='center',
-                    fontsize=11, fontweight='bold')
+        for i, (t, h) in enumerate(cands):
+            w = (wilco[(wilco['experiment'] == exp) &
+                       (wilco['task_type']  == t) &
+                       (wilco['host_type']  == h)]
+                 if wilco is not None and hasattr(wilco, 'columns')
+                 else None)
+            if w is None or len(w) == 0:
+                continue
+            stars = _sig_stars(w['pvalue'].iloc[0])
+            tops_i = [means[m][i] for m in mode_names if np.isfinite(means[m][i])]
+            top = max(tops_i) if tops_i else 0.0
+            ax.text(i, top + 0.12 * yrange, stars,
+                    ha='center', fontsize=11, fontweight='bold')
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
@@ -1689,71 +1984,93 @@ def _paired_mode_bars(ax, exp_df, cands, stat_col, wilco, exp,
 
 def plot_rms_comparison(long_df, top_candidates, wilcoxon_rms, *,
                         save=True, save_dir=HEARTBEAT_DIR):
-    """One figure per experiment, 1x2: pooled per-session RMS histogram
-    (blue = all_events, orange = outliers_only) and per-candidate mean
-    RMS bar chart with paired Wilcoxon significance stars.
+    """One figure per (experiment, FIT candidate), 1x2: pooled per-session
+    RMS histogram (gray=before, blue=all_events, orange=outliers_only) and
+    grouped-bar chart of mean RMS — clusters are EVENT candidates, bars are
+    modes, with paired Wilcoxon stars per (fit, event_type) pair.
 
-    `wilcoxon_rms` is the precomputed output of
-    paired_wilcoxon_per_candidate(long_df, stat_col='rms')."""
-    if long_df is None or long_df.empty or top_candidates.empty:
+    `wilcoxon_rms` is the output of `paired_wilcoxon_all_pairs(...,'rms')`
+    on a `residual_summary` that carries `fit_task_type`/`fit_host_type`.
+    """
+    long_df = _coerce_mode_long(long_df)
+    if (long_df is None or long_df.empty or
+            top_candidates is None or top_candidates.empty):
         print('No data - nothing to plot.')
+        return []
+    if 'fit_task_type' not in long_df.columns:
+        raise ValueError("plot_rms_comparison requires a residual_summary with "
+                         "fit_task_type/fit_host_type columns (refactored build).")
+
+    fit_keys = long_df[['experiment', 'fit_task_type', 'fit_host_type']] \
+                  .drop_duplicates()
+    tc_keys = top_candidates[['experiment', 'task_type', 'host_type']] \
+                 .rename(columns={'task_type': 'fit_task_type',
+                                  'host_type': 'fit_host_type'})
+    fit_keys = fit_keys.merge(tc_keys,
+                              on=['experiment', 'fit_task_type', 'fit_host_type'],
+                              how='inner')
+    if fit_keys.empty:
+        print('No fit candidates - nothing to plot.')
         return []
 
     saved = []
+    for _, fk in fit_keys.iterrows():
+        exp = fk['experiment']
+        sub = long_df[(long_df['experiment']    == exp) &
+                      (long_df['fit_task_type'] == fk['fit_task_type']) &
+                      (long_df['fit_host_type'] == fk['fit_host_type'])]
+        if sub.empty:
+            continue
 
-    for exp, exp_tc in top_candidates.groupby('experiment', sort=False):
-        # Candidate list comes from `wilcoxon_rms` so caller-side filtering
-        # (e.g. .query("all_events_mean < 500")) propagates to both panels.
-        # Order is preserved from `top_candidates`.
-        w_exp = wilcoxon_rms[wilcoxon_rms['experiment'] == exp]
-        w_keys = set(zip(w_exp['task_type'], w_exp['host_type']))
-        cands = [(t, h) for t, h in exp_tc[['task_type', 'host_type']]
-                                          .drop_duplicates()
-                                          .itertuples(index=False, name=None)
+        # Event candidates inside this fit: take the wilcoxon-supported set
+        # so caller filters propagate.
+        w_sub = wilcoxon_rms[(wilcoxon_rms['experiment']    == exp) &
+                             (wilcoxon_rms['fit_task_type'] == fk['fit_task_type']) &
+                             (wilcoxon_rms['fit_host_type'] == fk['fit_host_type'])]
+        w_keys = set(zip(w_sub['task_type'], w_sub['host_type']))
+        cands = [(t, h) for t, h in (sub[['task_type', 'host_type']]
+                                      .drop_duplicates()
+                                      .itertuples(index=False, name=None))
                  if (t, h) in w_keys]
         if not cands:
-            continue
-        cand_df = pd.DataFrame(cands, columns=['task_type', 'host_type'])
-        exp_df = long_df[long_df['experiment'] == exp].merge(
-            cand_df, on=['task_type', 'host_type'])
-        if exp_df.empty:
             continue
 
         fig, axes = plt.subplots(1, 2, figsize=(14, 4.5))
 
-        blue_rms   = exp_df.loc[exp_df['mode'] == 'all_events',    'rms'].to_numpy()
-        orange_rms = exp_df.loc[exp_df['mode'] == 'outliers_only', 'rms'].to_numpy()
         ax = axes[0]
-        if blue_rms.size:
-            ax.hist(blue_rms,   bins=40, color='C0', alpha=0.5,
-                    label=f'all_events (n={blue_rms.size})')
-        if orange_rms.size:
-            ax.hist(orange_rms, bins=40, color='C1', alpha=0.5,
-                    label=f'outliers_only (n={orange_rms.size})')
+        for mode_name, color in (('before',        'C0'),
+                                 ('all_events',    'C1'),
+                                 ('outliers_only', 'C2')):
+            vals = sub.loc[sub['mode'] == mode_name, 'rms'].to_numpy()
+            if vals.size:
+                ax.hist(vals, bins=40, color=color, alpha=0.5,
+                        label=f'{mode_name} (n={vals.size})')
         ax.set_xlabel('RMS (ms)')
-        ax.set_ylabel('# (candidate, session)')
-        ax.set_title(f'Pooled per-session RMS ({len(cands)} candidates)')
+        ax.set_ylabel('# (event_type, session)')
+        ax.set_title(f'Pooled per-session RMS  ({len(cands)} event types)')
         ax.legend(fontsize=9)
         ax.grid(alpha=0.3)
         ax.set_yscale('log')
 
         labels = [f'{t} ->\n{h}' for t, h in cands]
         _paired_mode_bars(
-            axes[1], exp_df, cands, 'rms', wilcoxon_rms, exp,
+            axes[1], sub, cands, 'rms', w_sub, exp,
             labels=labels,
-            title='Mean RMS per candidate  (Wilcoxon: *<.05 **<.01 ***<.001)',
+            title='Mean RMS per event type  (Wilcoxon: *<.05 **<.01 ***<.001)',
             ylab='mean RMS across sessions (ms)')
 
         fig.suptitle(
-            f'RMS vs HEARTBEATs When Correcting All Events vs Outliers Only  |  {exp}',
+            f'RMS vs HEARTBEATs  |  fit on '
+            f'{fk["fit_task_type"]} <-> {fk["fit_host_type"]}  |  {exp}',
             fontsize=12, y=1.03)
-        # plt.yscale('log')
         plt.tight_layout()
 
         if save:
             sub_dir = os.path.join(save_dir, 'mode_comparison')
-            saved.append(_save_fig(fig, f'{_safe_name(exp)}_rms_comparison',
-                                   save_dir=sub_dir))
+            name = (f'{_safe_name(exp)}_fit_'
+                    f'{_safe_name(fk["fit_task_type"])}_'
+                    f'{_safe_name(fk["fit_host_type"])}_rms')
+            saved.append(_save_fig(fig, name, save_dir=sub_dir))
         plt.show()
     return saved
 
@@ -1761,64 +2078,89 @@ def plot_rms_comparison(long_df, top_candidates, wilcoxon_rms, *,
 def plot_residual_mean_std_comparison(long_df, top_candidates,
                                       wilcoxon_mean, wilcoxon_std, *,
                                       save=True, save_dir=HEARTBEAT_DIR):
-    """One figure per experiment, 1x2: per-candidate mean residual (left)
-    and std residual (right). Each panel: paired blue/orange bars with
-    paired Wilcoxon significance stars.
+    """One figure per (experiment, FIT candidate), 1x2: grouped bars of mean
+    residual (left) and std residual (right). Each panel: cluster = EVENT
+    candidate, within-cluster bars = mode (before / all_events / outliers_only),
+    with paired Wilcoxon significance brackets between mode pairs.
 
-    `wilcoxon_mean` and `wilcoxon_std` are precomputed outputs of
-    paired_wilcoxon_per_candidate(long_df, stat_col='mean_resid') and
-    paired_wilcoxon_per_candidate(long_df, stat_col='std_resid')."""
-    if long_df is None or long_df.empty or top_candidates.empty:
+    `wilcoxon_mean` and `wilcoxon_std` are outputs of
+    `paired_wilcoxon_all_pairs(...)` on a `residual_summary` carrying
+    `fit_task_type`/`fit_host_type`.
+    """
+    long_df = _coerce_mode_long(long_df)
+    if (long_df is None or long_df.empty or
+            top_candidates is None or top_candidates.empty):
         print('No data - nothing to plot.')
+        return []
+    if 'fit_task_type' not in long_df.columns:
+        raise ValueError("plot_residual_mean_std_comparison requires a "
+                         "residual_summary with fit_task_type/fit_host_type "
+                         "columns (refactored build).")
+
+    fit_keys = long_df[['experiment', 'fit_task_type', 'fit_host_type']] \
+                  .drop_duplicates()
+    tc_keys = top_candidates[['experiment', 'task_type', 'host_type']] \
+                 .rename(columns={'task_type': 'fit_task_type',
+                                  'host_type': 'fit_host_type'})
+    fit_keys = fit_keys.merge(tc_keys,
+                              on=['experiment', 'fit_task_type', 'fit_host_type'],
+                              how='inner')
+    if fit_keys.empty:
+        print('No fit candidates - nothing to plot.')
         return []
 
     saved = []
-
-    for exp, exp_tc in top_candidates.groupby('experiment', sort=False):
-        # Candidates plotted = intersection of both wilcoxon dfs (so caller
-        # filtering on either propagates), ordered by `top_candidates`.
-        wm_keys = set(zip(wilcoxon_mean.loc[wilcoxon_mean['experiment'] == exp, 'task_type'],
-                          wilcoxon_mean.loc[wilcoxon_mean['experiment'] == exp, 'host_type']))
-        ws_keys = set(zip(wilcoxon_std.loc[wilcoxon_std['experiment'] == exp, 'task_type'],
-                          wilcoxon_std.loc[wilcoxon_std['experiment'] == exp, 'host_type']))
+    for _, fk in fit_keys.iterrows():
+        exp = fk['experiment']
+        sub = long_df[(long_df['experiment']    == exp) &
+                      (long_df['fit_task_type'] == fk['fit_task_type']) &
+                      (long_df['fit_host_type'] == fk['fit_host_type'])]
+        if sub.empty:
+            continue
+        wm_sub = wilcoxon_mean[
+            (wilcoxon_mean['experiment']    == exp) &
+            (wilcoxon_mean['fit_task_type'] == fk['fit_task_type']) &
+            (wilcoxon_mean['fit_host_type'] == fk['fit_host_type'])]
+        ws_sub = wilcoxon_std[
+            (wilcoxon_std['experiment']    == exp) &
+            (wilcoxon_std['fit_task_type'] == fk['fit_task_type']) &
+            (wilcoxon_std['fit_host_type'] == fk['fit_host_type'])]
+        wm_keys = set(zip(wm_sub['task_type'], wm_sub['host_type']))
+        ws_keys = set(zip(ws_sub['task_type'], ws_sub['host_type']))
         keep = wm_keys & ws_keys
-        cands = [(t, h) for t, h in exp_tc[['task_type', 'host_type']]
-                                          .drop_duplicates()
-                                          .itertuples(index=False, name=None)
+        cands = [(t, h) for t, h in (sub[['task_type', 'host_type']]
+                                       .drop_duplicates()
+                                       .itertuples(index=False, name=None))
                  if (t, h) in keep]
         if not cands:
             continue
-        cand_df = pd.DataFrame(cands, columns=['task_type', 'host_type'])
-        exp_df = long_df[long_df['experiment'] == exp].merge(
-            cand_df, on=['task_type', 'host_type'])
-        if exp_df.empty:
-            continue
-
         labels = [f'{t} ->\n{h}' for t, h in cands]
 
         fig, axes = plt.subplots(1, 2, figsize=(14, 4.5))
         _paired_mode_bars(
-            axes[0], exp_df, cands, 'mean_resid', wilcoxon_mean, exp,
+            axes[0], sub, cands, 'mean_resid', wm_sub, exp,
             labels=labels,
-            title='Mean residual per candidate  (Wilcoxon: *<.05 **<.01 ***<.001)',
+            title='Mean residual per event type  (Wilcoxon: *<.05 **<.01 ***<.001)',
             ylab='mean residual (ms)')
         axes[0].axhline(0, color='k', linestyle='--', linewidth=0.7)
         _paired_mode_bars(
-            axes[1], exp_df, cands, 'std_resid', wilcoxon_std, exp,
+            axes[1], sub, cands, 'std_resid', ws_sub, exp,
             labels=labels,
-            title='Std residual per candidate  (Wilcoxon: *<.05 **<.01 ***<.001)',
+            title='Std residual per event type  (Wilcoxon: *<.05 **<.01 ***<.001)',
             ylab='std residual (ms)')
 
         fig.suptitle(
-            f'Residual Mean & STD vs HEARTBEATs When Correcting All Events vs Outliers Only '
-            f'  |  {exp}',
+            f'Residual Mean & STD vs HEARTBEATs  |  fit on '
+            f'{fk["fit_task_type"]} <-> {fk["fit_host_type"]}  |  {exp}',
             fontsize=12, y=1.03)
         plt.tight_layout()
 
         if save:
             sub_dir = os.path.join(save_dir, 'mode_comparison')
-            saved.append(_save_fig(fig, f'{_safe_name(exp)}_residual_mean_std',
-                                   save_dir=sub_dir))
+            name = (f'{_safe_name(exp)}_fit_'
+                    f'{_safe_name(fk["fit_task_type"])}_'
+                    f'{_safe_name(fk["fit_host_type"])}_mean_std')
+            saved.append(_save_fig(fig, name, save_dir=sub_dir))
         plt.show()
     return saved
 
@@ -2035,3 +2377,574 @@ def plot_pooled_residual_hist(corrections_eval, unambiguous, session_event_cache
               f'p95(|x|)={np.percentile(np.abs(pooled), 95):.3f} ms, '
               f'max(|x|)={np.abs(pooled).max():.3f} ms')
         print()
+
+
+# ===== Calc-section DataFrame builders (refactor) =====
+#
+# These produce the five DataFrames consumed by the calc-then-plot version of
+# check_nonheart_messages_gt.ipynb:
+#   nh_fits          (= build_corrections_eval output, reused as-is)
+#   gt_fits          (build_gt_fits)
+#   event_residuals  (build_event_residuals)
+#   residual_summary (build_residual_summary)
+#   drift_df         (build_drift_df)
+# Every plot in the refactored notebook is a pure function of this set.
+
+
+def build_gt_fits(prepared_by_sess, samplerates_by_sess=None, *,
+                  min_heartbeats=20):
+    """Heartbeat-based ground-truth fit per session, packaged as a DataFrame.
+
+    Plain OLS on each session's filtered merged heartbeats (already restricted
+    upstream to one-way latency <= 1 ms), with `offset` adjusted by the median
+    one-way latency the same way the original inline cell did.
+
+    `prepared_by_sess` is the {(sub, exp, sess, orig_sess) -> {merged_df, ...}}
+    dict built in the notebook by prepare_merged_heartbeats. `samplerates_by_sess`
+    is the {(sub, exp, sess) -> samplerate} dict; if None, the samplerate column
+    is filled with NaN.
+
+    Columns:
+        subject, experiment, session, original_session,
+        slope, offset, uncorrected_offset, average_latency,
+        n_inliers, rms_residual, samplerate
+    """
+    if not prepared_by_sess:
+        return pd.DataFrame()
+    sr_lookup = samplerates_by_sess or {}
+    rows = []
+    for (sub, exp, sess, orig_sess), prep in prepared_by_sess.items():
+        md = prep.get('merged_df')
+        if md is None or len(md) < min_heartbeats:
+            continue
+        x = md[['time_task']].astype(float)
+        y = md['time_host'].astype(float)
+        lr = _LR().fit(x, y)
+        slope          = float(lr.coef_[0])
+        offset_raw     = float(lr.intercept_)
+        median_one_way = float(md['one_way_latency_ms'].median())
+        offset         = offset_raw - median_one_way
+        residuals      = y.to_numpy() - (slope * x.to_numpy().ravel() + offset_raw)
+        rms_residual   = float(np.sqrt((residuals ** 2).mean())) if len(residuals) else float('nan')
+
+        rows.append({
+            'subject':            sub,
+            'experiment':         exp,
+            'session':            int(sess),
+            'original_session':   orig_sess,
+            'slope':              slope,
+            'offset':             offset,
+            'uncorrected_offset': offset_raw,
+            'average_latency':    2.0 * median_one_way,
+            'n_inliers':          int(len(md)),
+            'rms_residual':       rms_residual,
+            'samplerate':         float(sr_lookup.get((sub, exp, int(sess)), float('nan'))),
+        })
+    return pd.DataFrame(rows)
+
+
+def build_event_residuals(top_candidates, session_event_cache, nh_fits, gt_fits, *,
+                          inlier_threshold_ms=RANSAC_INLIER_MS):
+    """Long event-level DataFrame: one row per
+    (fit_candidate, event_candidate, session, condition, event_idx).
+
+    For every NH candidate fit in `nh_fits` (the "fit candidate"), apply that
+    fit to events of EVERY candidate (the "event candidate") and compute
+    residuals against the heartbeat (GT) line. This produces a per-fit-
+    candidate view: each fit is treated as a possible session-wide anchor
+    and we see how well it generalizes to the full event pool.
+
+    For each (fit, event_type, session):
+        - look up (slope_nh, offset_nh) for the FIT candidate from `nh_fits`
+        - pull (t, h) of the EVENT candidate from session_event_cache
+        - inlier_mask: |h - (slope_nh*t + offset_nh)| <= inlier_threshold_ms
+        - corrected_h variants:
+            before          : h
+            after_all       : slope_nh*t + offset_nh             (every event snapped)
+            after_outliers  : where(inlier_mask, h, slope_nh*t + offset_nh)
+        - residual_ms     = corrected_h - (slope_gt*t + offset_gt)
+
+    Columns:
+        experiment, subject, session,
+        fit_task_type, fit_host_type,
+        task_type, host_type,
+        condition, event_idx,
+        t, h, corrected_h, residual_ms, is_inlier_nh.
+    """
+    if (top_candidates is None or top_candidates.empty or
+            nh_fits is None or nh_fits.empty or
+            gt_fits is None or gt_fits.empty):
+        return pd.DataFrame()
+
+    fits = nh_fits.dropna(subset=['slope']).copy()
+    fits = _filter_to_top_candidates(fits, top_candidates)
+    if fits.empty:
+        return pd.DataFrame()
+
+    gt = (gt_fits[['subject', 'experiment', 'session', 'slope', 'offset']]
+          .rename(columns={'slope': 'slope_gt', 'offset': 'offset_gt'})
+          .dropna(subset=['slope_gt', 'offset_gt']))
+
+    # Event-candidate set: same as the set of candidates we have fits for
+    # (they're drawn from the same top_candidates).
+    event_cands = (top_candidates[['experiment', 'task_type', 'host_type']]
+                   .drop_duplicates().reset_index(drop=True))
+
+    chunks = []
+    for _, fit_row in fits.iterrows():
+        sub, exp, sess = fit_row['subject'], fit_row['experiment'], fit_row['session']
+        gt_row = gt[(gt['subject'] == sub) &
+                    (gt['experiment'] == exp) &
+                    (gt['session']    == sess)]
+        if gt_row.empty:
+            continue
+        slope_nh  = float(fit_row['slope']);    offset_nh = float(fit_row['offset'])
+        slope_gt  = float(gt_row.iloc[0]['slope_gt'])
+        offset_gt = float(gt_row.iloc[0]['offset_gt'])
+        fit_t, fit_h = fit_row['task_type'], fit_row['host_type']
+
+        # Same-experiment event candidates only.
+        for _, ec in event_cands[event_cands['experiment'] == exp].iterrows():
+            target = {'subject':    sub,
+                      'experiment': exp,
+                      'session':    sess,
+                      'task_type':  ec['task_type'],
+                      'host_type':  ec['host_type']}
+            t, h = _pull_pair(target, session_event_cache)
+            if t is None:
+                continue
+            nh_pred = slope_nh * t + offset_nh
+            gt_pred = slope_gt * t + offset_gt
+            inlier_mask = np.abs(h - nh_pred) <= inlier_threshold_ms
+
+            ch_variants = {
+                'before':         h,
+                'after_all':      _corrected_h(t, h, slope_nh, offset_nh,
+                                               inlier_mask, 'all_events'),
+                'after_outliers': _corrected_h(t, h, slope_nh, offset_nh,
+                                               inlier_mask, 'outliers_only'),
+            }
+            for cond, ch in ch_variants.items():
+                chunks.append(pd.DataFrame({
+                    'experiment':    exp,
+                    'subject':       sub,
+                    'session':       int(sess),
+                    'fit_task_type': fit_t,
+                    'fit_host_type': fit_h,
+                    'task_type':     ec['task_type'],
+                    'host_type':     ec['host_type'],
+                    'condition':     cond,
+                    'event_idx':     np.arange(len(t), dtype=int),
+                    't':             t,
+                    'h':             h,
+                    'corrected_h':   ch,
+                    'residual_ms':   ch - gt_pred,
+                    'is_inlier_nh':  inlier_mask,
+                }))
+
+    if not chunks:
+        return pd.DataFrame()
+    return pd.concat(chunks, ignore_index=True)
+
+
+def build_residual_summary(event_residuals):
+    """Per-(fit_candidate, event_candidate, session, condition) summary stats."""
+    if event_residuals is None or event_residuals.empty:
+        return pd.DataFrame()
+
+    def _agg(r):
+        r = r.to_numpy(dtype=float)
+        if r.size == 0:
+            return pd.Series({'rms': float('nan'), 'mean_resid': float('nan'),
+                              'std_resid': float('nan'),
+                              'p95_abs_resid': float('nan'), 'n_events': 0})
+        return pd.Series({
+            'rms':           float(np.sqrt(np.mean(r ** 2))),
+            'mean_resid':    float(np.mean(r)),
+            'std_resid':     float(np.std(r)),
+            'p95_abs_resid': float(np.percentile(np.abs(r), 95)),
+            'n_events':      int(r.size),
+        })
+
+    grouped = event_residuals.groupby(
+        ['experiment', 'fit_task_type', 'fit_host_type',
+         'task_type', 'host_type',
+         'subject', 'session', 'condition'], sort=False
+    )['residual_ms']
+    return grouped.apply(_agg).unstack(level=-1).reset_index()
+
+
+def build_drift_df(nh_fits, gt_fits, session_event_cache, *,
+                   top_candidates=None, sess_seconds=SESS_SECONDS,
+                   inlier_threshold_ms=RANSAC_INLIER_MS):
+    """Long drift DataFrame: one row per
+    (fit_candidate, event_candidate, session, mode, condition).
+
+    `mode` in {'all_events', 'outliers_only'}, `condition` in {'before', 'after'}.
+
+    Each row carries two flavors of drift: `_rel` (relative to GT) and `_abs`
+    (absolute, relative to the identity slope = 1):
+
+        RELATIVE (residual after correction, vs GT):
+            before, *                : (slope_gt - slope_nh)     * sess_seconds * 1000
+            after,  all_events       : (slope_gt - slope_lr_all) * sess_seconds * 1000
+            after,  outliers_only    : (slope_gt - slope_lr_out) * sess_seconds * 1000
+
+        ABSOLUTE (slope deviation from no-drift identity):
+            before, *                : (slope_nh     - 1) * sess_seconds * 1000
+            after,  all_events       : (slope_lr_all - 1) * sess_seconds * 1000
+            after,  outliers_only    : (slope_lr_out - 1) * sess_seconds * 1000
+
+    `slope_nh` is the FIT candidate's RANSAC fit slope for that session.
+    `slope_lr_all` is an OLS (linear regression, not RANSAC) refit on
+    (t, slope_nh*t + offset_nh), i.e. all events snapped to the RANSAC fit
+    line; numerically equal to slope_nh.
+    `slope_lr_out` is an OLS refit on (t, corrected_h_outliers_only), where
+    outliers are snapped to slope_nh*t+offset_nh and inliers keep raw h.
+    (t, h) is the EVENT candidate's events and slope_nh/offset_nh are the
+    FIT candidate's NH fit for that session.
+    `drift_samples_* = drift_ms_* * samplerate / 1000` when gt_fits has a
+    `samplerate` column.
+    """
+    if (nh_fits is None or nh_fits.empty or
+            gt_fits is None or gt_fits.empty):
+        return pd.DataFrame()
+
+    fits = nh_fits.dropna(subset=['slope']).copy()
+    fits = _filter_to_top_candidates(fits, top_candidates)
+    if fits.empty:
+        return pd.DataFrame()
+
+    gt_cols = ['subject', 'experiment', 'session', 'slope']
+    if 'samplerate' in gt_fits.columns:
+        gt_cols.append('samplerate')
+    gt = (gt_fits[gt_cols]
+          .rename(columns={'slope': 'slope_gt'})
+          .dropna(subset=['slope_gt']))
+
+    if top_candidates is None or top_candidates.empty:
+        event_cands = fits[['experiment', 'task_type', 'host_type']].drop_duplicates()
+    else:
+        event_cands = top_candidates[['experiment', 'task_type', 'host_type']].drop_duplicates()
+
+    rows = []
+    for _, fit_row in fits.iterrows():
+        sub, exp, sess = fit_row['subject'], fit_row['experiment'], fit_row['session']
+        gt_row = gt[(gt['subject'] == sub) &
+                    (gt['experiment'] == exp) &
+                    (gt['session']    == sess)]
+        if gt_row.empty:
+            continue
+        slope_nh  = float(fit_row['slope'])
+        offset_nh = float(fit_row['offset'])
+        slope_gt  = float(gt_row.iloc[0]['slope_gt'])
+        sr        = (float(gt_row.iloc[0]['samplerate'])
+                     if 'samplerate' in gt_row.columns else float('nan'))
+        fit_t, fit_h = fit_row['task_type'], fit_row['host_type']
+
+        drift_before_rel = (slope_gt - slope_nh) * sess_seconds * 1000.0
+        drift_before_abs = (slope_nh - 1.0)      * sess_seconds * 1000.0
+
+        for _, ec in event_cands[event_cands['experiment'] == exp].iterrows():
+            target = {'subject':    sub,
+                      'experiment': exp,
+                      'session':    sess,
+                      'task_type':  ec['task_type'],
+                      'host_type':  ec['host_type']}
+            t, h = _pull_pair(target, session_event_cache)
+            if t is None or len(t) < 2:
+                slope_lr_all = float('nan')
+                slope_lr_out = float('nan')
+            else:
+                t_arr = np.asarray(t, dtype=float)
+                corrected_all = slope_nh * t_arr + offset_nh
+                slope_lr_all = float(np.polyfit(t_arr, corrected_all, 1)[0])
+                slope_lr_out, _ = _slope_eff_outliers_only(
+                    t, h, slope_nh, offset_nh,
+                    inlier_threshold_ms=inlier_threshold_ms)
+            drift_after_all_rel = (slope_gt - slope_lr_all) * sess_seconds * 1000.0
+            drift_after_out_rel = (slope_gt - slope_lr_out) * sess_seconds * 1000.0
+            drift_after_all_abs = (slope_lr_all - 1.0)      * sess_seconds * 1000.0
+            drift_after_out_abs = (slope_lr_out - 1.0)      * sess_seconds * 1000.0
+
+            base = {
+                'experiment':    exp,
+                'subject':       sub,
+                'session':       int(sess),
+                'fit_task_type': fit_t,
+                'fit_host_type': fit_h,
+                'task_type':     ec['task_type'],
+                'host_type':     ec['host_type'],
+                'slope_nh':      slope_nh,
+                'slope_gt':      slope_gt,
+                'slope_lr_all':  slope_lr_all,
+                'slope_lr_out':  slope_lr_out,
+                'samplerate':    sr,
+            }
+            for mode, condition, drift_ms_rel, drift_ms_abs in (
+                ('all_events',    'before', drift_before_rel,    drift_before_abs),
+                ('all_events',    'after',  drift_after_all_rel, drift_after_all_abs),
+                ('outliers_only', 'before', drift_before_rel,    drift_before_abs),
+                ('outliers_only', 'after',  drift_after_out_rel, drift_after_out_abs),
+            ):
+                sr_ok = not np.isnan(sr)
+                drift_samples_rel = (drift_ms_rel * sr / 1000.0
+                                     if sr_ok and not np.isnan(drift_ms_rel)
+                                     else float('nan'))
+                drift_samples_abs = (drift_ms_abs * sr / 1000.0
+                                     if sr_ok and not np.isnan(drift_ms_abs)
+                                     else float('nan'))
+                rows.append({**base,
+                             'mode':              mode,
+                             'condition':         condition,
+                             'drift_ms_rel':      drift_ms_rel,
+                             'drift_samples_rel': drift_samples_rel,
+                             'drift_ms_abs':      drift_ms_abs,
+                             'drift_samples_abs': drift_samples_abs})
+
+    return pd.DataFrame(rows)
+
+
+def _residual_summary_to_mode_long(residual_summary):
+    """Adapter: convert residual_summary (long with `condition`) to the
+    long_df shape (with `mode`) that plot_rms_comparison and
+    plot_residual_mean_std_comparison consume. Includes the uncorrected
+    `before` condition so those plots can draw a third reference bar."""
+    if residual_summary is None or residual_summary.empty:
+        return pd.DataFrame()
+    keep = residual_summary[
+        residual_summary['condition'].isin(['before', 'after_all', 'after_outliers'])
+    ].copy()
+    keep['mode'] = keep['condition'].map({
+        'before':         'before',
+        'after_all':      'all_events',
+        'after_outliers': 'outliers_only',
+    })
+    return keep.drop(columns='condition')
+
+
+# ===== Calc-section-driven plots (refactor) =====
+
+
+def plot_residuals_distribution_pooled(event_residuals, top_candidates, *,
+                                       abs_threshold_ms=20, clip_ms=600,
+                                       save=True, save_dir=HEARTBEAT_DIR):
+    """Per-FIT-candidate pooled residual histograms, three conditions overlaid.
+
+    Pure function of `event_residuals`. For each `(experiment, fit_task_type,
+    fit_host_type)` group in `event_residuals`, pool events from ALL event
+    types and overlay `before`, `after_all`, `after_outliers` on a single
+    log-y histogram. `top_candidates` is used only to restrict the set of fit
+    candidates plotted; `event_residuals` itself already contains events from
+    all event candidates.
+    """
+    if event_residuals is None or event_residuals.empty:
+        print('No event_residuals - nothing to plot.')
+        return []
+
+    fit_keys = (event_residuals[['experiment', 'fit_task_type', 'fit_host_type']]
+                .drop_duplicates())
+    if top_candidates is not None and not top_candidates.empty:
+        tc = top_candidates[['experiment', 'task_type', 'host_type']] \
+                .rename(columns={'task_type': 'fit_task_type',
+                                 'host_type': 'fit_host_type'})
+        fit_keys = fit_keys.merge(tc,
+                                  on=['experiment', 'fit_task_type', 'fit_host_type'],
+                                  how='inner')
+    if fit_keys.empty:
+        print('No fit candidates to plot.')
+        return []
+
+    saved_paths = []
+    for _, fk in fit_keys.iterrows():
+        sub = event_residuals[
+            (event_residuals['experiment']    == fk['experiment']) &
+            (event_residuals['fit_task_type'] == fk['fit_task_type']) &
+            (event_residuals['fit_host_type'] == fk['fit_host_type'])
+        ]
+        if sub.empty:
+            continue
+        n_sess = sub[['subject', 'session']].drop_duplicates().shape[0]
+        n_evt_types = sub[['task_type', 'host_type']].drop_duplicates().shape[0]
+
+        fig = plt.figure(figsize=(8, 5))
+        bins = np.linspace(-clip_ms, clip_ms, 80)
+        stats_lines = []
+        for cond, label_pfx in (('before',         'before'),
+                                ('after_all',      'after all events'),
+                                ('after_outliers', 'after outliers only')):
+            r = sub.query("condition == @cond")['residual_ms'].to_numpy()
+            if r.size == 0:
+                continue
+            pct = 100 * (np.abs(r) > abs_threshold_ms).sum() / r.size
+            plt.hist(r[np.abs(r) < clip_ms], bins=bins, alpha=0.45,
+                     label=f'{label_pfx}  (n={r.size}, '
+                           f'{pct:.1f}% > {abs_threshold_ms} ms)')
+            stats_lines.append(
+                f'  {label_pfx:<22}: median={np.median(r):.3f} ms, '
+                f'std={r.std(ddof=1):.3f} ms, '
+                f'p95(|x|)={np.percentile(np.abs(r), 95):.3f} ms')
+
+        plt.axvline(0, color='k', linestyle='--', alpha=0.35)
+        plt.yscale('log')
+        plt.xlabel('residual (ms)')
+        plt.ylabel('# events')
+        plt.legend()
+        plt.title(
+            f'Pooled residuals vs GT  |  fit on '
+            f'{fk["fit_task_type"]} <-> {fk["fit_host_type"]}\n'
+            f'{fk["experiment"]}  |  applied to {n_evt_types} event type(s), '
+            f'{n_sess} sessions')
+        plt.grid(alpha=0.3)
+        plt.tight_layout()
+
+        if save:
+            sub_dir = os.path.join(save_dir, 'residuals_distribution_pooled')
+            name = (f'{_safe_name(fk["experiment"])}_fit_'
+                    f'{_safe_name(fk["fit_task_type"])}_'
+                    f'{_safe_name(fk["fit_host_type"])}')
+            saved_paths.append(_save_fig(fig, name, save_dir=sub_dir))
+        plt.show()
+        for line in stats_lines:
+            print(line)
+        print()
+
+    return saved_paths
+
+
+_DRIFT_VERSIONS = ('relative', 'absolute')
+
+
+def plot_drift_distribution(drift_df, top_candidates, *, kind='wallclock',
+                            version='both',
+                            session_seconds=SESS_SECONDS,
+                            save=True, save_dir=HEARTBEAT_DIR):
+    """Per-FIT-candidate drift histograms with BEFORE vs AFTER overlaid in
+    each of two panels (mode='all_events', mode='outliers_only').
+
+    Pure function of `drift_df`. One figure per (FIT candidate, version);
+    events from ALL event candidates are pooled into each histogram.
+    `top_candidates` restricts which fit candidates are shown.
+
+    `kind='wallclock'` selects `drift_ms_*`; `kind='eegoffset'` selects
+    `drift_samples_*` (present when gt_fits carried a `samplerate` column).
+    `version='relative'` plots residual drift vs GT (slope_gt - slope_X);
+    `version='absolute'` plots slope deviation from identity (slope_X - 1);
+    `version='both'` (default) produces one figure per version per fit.
+    """
+    if drift_df is None or drift_df.empty:
+        print('No drift_df - nothing to plot.')
+        return []
+
+    if version == 'both':
+        versions = _DRIFT_VERSIONS
+    elif version in _DRIFT_VERSIONS:
+        versions = (version,)
+    else:
+        raise ValueError(
+            f"version must be one of {_DRIFT_VERSIONS + ('both',)}; got {version!r}")
+
+    if kind == 'wallclock':
+        col_stem, unit_label = 'drift_ms', 'ms'
+    elif kind == 'eegoffset':
+        col_stem, unit_label = 'drift_samples', 'samples'
+    else:
+        raise ValueError(f"kind must be 'wallclock' or 'eegoffset'; got {kind!r}")
+
+    fit_keys = drift_df[['experiment', 'fit_task_type', 'fit_host_type']] \
+                  .drop_duplicates()
+    if top_candidates is not None and not top_candidates.empty:
+        tc = top_candidates[['experiment', 'task_type', 'host_type']] \
+                .rename(columns={'task_type': 'fit_task_type',
+                                 'host_type': 'fit_host_type'})
+        fit_keys = fit_keys.merge(tc,
+                                  on=['experiment', 'fit_task_type', 'fit_host_type'],
+                                  how='inner')
+    if fit_keys.empty:
+        print('No fit candidates to plot.')
+        return []
+
+    saved_paths = []
+    for ver in versions:
+        suffix = 'rel' if ver == 'relative' else 'abs'
+        col = f'{col_stem}_{suffix}'
+        if col not in drift_df.columns:
+            raise ValueError(
+                f"drift_df missing column {col!r} (rebuild via build_drift_df)")
+        ver_label = ver.upper()
+        truth_phrase = ('vs GT' if ver == 'relative'
+                        else 'vs identity (slope=1)')
+
+        for _, fk in fit_keys.iterrows():
+            sub = drift_df[
+                (drift_df['experiment']    == fk['experiment']) &
+                (drift_df['fit_task_type'] == fk['fit_task_type']) &
+                (drift_df['fit_host_type'] == fk['fit_host_type'])
+            ]
+            if sub.empty:
+                continue
+            all_vals = sub[col].dropna().to_numpy()
+            if all_vals.size == 0:
+                continue
+            lo, hi = np.nanpercentile(all_vals, [1, 99])
+            if not np.isfinite(lo) or not np.isfinite(hi) or lo == hi:
+                lo, hi = (float(all_vals.min()) - 1.0,
+                          float(all_vals.max()) + 1.0)
+            bins = np.linspace(lo, hi, 30)
+
+            # Color convention: before → C0 blue; after, all_events → C1 orange;
+            # after, outliers_only → C2 green.
+            fig, axes = plt.subplots(1, 2, figsize=(12, 4),
+                                     sharex=True, sharey=True)
+            panel_specs = (
+                (axes[0], 'all_events',    'C1'),
+                (axes[1], 'outliers_only', 'C2'),
+            )
+            for ax, mode, after_color in panel_specs:
+                for cond, color, alpha in (('before', 'C0',          0.55),
+                                           ('after',  after_color,   0.55)):
+                    vals = sub[(sub['mode'] == mode) &
+                               (sub['condition'] == cond)][col].dropna().to_numpy()
+                    if vals.size == 0:
+                        continue
+                    med = float(np.median(vals))
+                    std = float(vals.std(ddof=1)) if vals.size > 1 else float('nan')
+                    ax.hist(vals, bins=bins, color=color, alpha=alpha,
+                            label=f'{cond} (n={vals.size}, '
+                                  f'med={med:.2f}, std={std:.2f})')
+                ax.axvline(0, color='k', linestyle='--', alpha=0.5)
+                ax.set_yscale('log')
+                ax.ticklabel_format(useOffset=False, style='plain', axis='x')
+                ax.set_xlabel(f'drift ({unit_label})')
+                ax.set_title(f'mode: {mode}')
+                ax.legend(fontsize=8)
+                ax.grid(alpha=0.3)
+            axes[0].set_ylabel('# (event_type, session)')
+
+            sfreq_str = ''
+            if kind == 'eegoffset' and 'samplerate' in sub.columns:
+                sr = sub['samplerate'].dropna()
+                if len(sr):
+                    sfreq_str = f'  @ {float(sr.median()):g} Hz'
+
+            n_sess = sub[['subject', 'session']].drop_duplicates().shape[0]
+            n_evt_types = sub[['task_type', 'host_type']].drop_duplicates().shape[0]
+            fig.suptitle(
+                f'[{ver_label}] Drift over {session_seconds}s {truth_phrase}'
+                f'{sfreq_str}  |  '
+                f'fit on {fk["fit_task_type"]} <-> {fk["fit_host_type"]}  |  '
+                f'{fk["experiment"]}  |  {n_evt_types} event type(s), '
+                f'{n_sess} sessions',
+                fontsize=11, y=1.02)
+            plt.tight_layout()
+
+            if save:
+                sub_dir = os.path.join(
+                    save_dir, f'drift_distribution_{kind}_{ver}')
+                name = (f'{_safe_name(fk["experiment"])}_fit_'
+                        f'{_safe_name(fk["fit_task_type"])}_'
+                        f'{_safe_name(fk["fit_host_type"])}_{kind}_{ver}')
+                saved_paths.append(_save_fig(fig, name, save_dir=sub_dir))
+            plt.show()
+    return saved_paths
+ 
