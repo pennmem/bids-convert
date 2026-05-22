@@ -58,19 +58,21 @@ os.makedirs(HEARTBEAT_DIR, exist_ok=True)
 CORRECTION_MODES = ('all_events', 'outliers_only')
 
 
-def _corrected_h(t, h, slope, offset, inlier_mask, mode):
-    """Return corrected host timestamps under one of two strategies.
+def _corrected_t(t, h, slope, offset, inlier_mask, mode):
+    """Return corrected task timestamps under one of two strategies.
 
-    'all_events':    every event snapped to the fit line (slope*t+offset).
-    'outliers_only': only outliers snapped; inliers keep raw h.
+    The fit is `task = slope * host + offset`.
+
+    'all_events':    every event snapped to the fit line (slope*h+offset).
+    'outliers_only': only outliers snapped; inliers keep raw t.
     """
     if mode == 'all_events':
-        return slope * np.asarray(t, dtype=float) + offset
+        return slope * np.asarray(h, dtype=float) + offset
     if mode == 'outliers_only':
         t = np.asarray(t, dtype=float)
         h = np.asarray(h, dtype=float)
         return np.where(np.asarray(inlier_mask, dtype=bool),
-                        h, slope * t + offset)
+                        t, slope * h + offset)
     raise ValueError(f"Unknown mode {mode!r}; expected one of {CORRECTION_MODES}")
 
 
@@ -211,24 +213,32 @@ def score_pair(t_name, h_name, t_times, h_times, host_dur, latency_ms,
     }
 
 
-def score_session(task_path, host_path):
+def score_session(task_path, host_path, *, include_heartbeats=False):
     """Run all-pair scoring for one session.
 
-    Returns (rows, latency_ms, host_dur, task_by_type, host_by_type)."""
+    By default HEARTBEAT / HEARTBEAT_OK events are stripped (since heartbeats
+    drive a separate GT fit pipeline). Pass `include_heartbeats=True` to keep
+    them in the candidate pool — they then appear as ordinary message types
+    like (HEARTBEAT, HEARTBEAT) or (HEARTBEAT, HEARTBEAT_OK) in the scored
+    pairs.
+
+    Returns (rows, latency_ms, host_dur, task_by_type, host_by_type,
+             host_events_all)."""
     try:
         task = read_jsonl(task_path)
         host = read_jsonl(host_path)
     except Exception:
-        return [], 0.0, 0.0, {}, {}
+        return [], 0.0, 0.0, {}, {}, []
     if not task or not host:
-        return [], 0.0, 0.0, {}, {}
+        return [], 0.0, 0.0, {}, {}, []
 
+    drop = set() if include_heartbeats else HEARTBEAT_LIKE
     task_pairs = [(norm(task_type(r)), task_time(r)) for r in task]
     host_pairs = [(norm(r.get('type')),  r.get('time'))  for r in host]
     task_pairs = [(t, ts) for t, ts in task_pairs
-                  if t and ts is not None and t not in HEARTBEAT_LIKE]
+                  if t and ts is not None and t not in drop]
     host_pairs = [(t, ts) for t, ts in host_pairs
-                  if t and ts is not None and t not in HEARTBEAT_LIKE]
+                  if t and ts is not None and t not in drop]
 
     task_by_type = {}
     for t, ts in task_pairs:
@@ -253,11 +263,15 @@ def score_session(task_path, host_path):
                             host_dur, latency_ms)
             if sc is not None:
                 rows.append(sc)
-    return rows, latency_ms, host_dur, task_by_type, host_by_type
+    return (rows, latency_ms, host_dur, task_by_type, host_by_type,
+            host_pairs)
 
 
-def score_all_sessions(qualifying, verbose=True):
+def score_all_sessions(qualifying, verbose=True, *, include_heartbeats=False):
     """Run score_session over every row of `qualifying`.
+
+    `include_heartbeats=True` keeps HEARTBEAT / HEARTBEAT_OK in the candidate
+    pool (otherwise they're dropped, matching the default upstream pipeline).
 
     Returns (all_pairs_df, session_event_cache, skipped) where
     session_event_cache is keyed by (subject, experiment, session)."""
@@ -283,8 +297,9 @@ def score_all_sessions(qualifying, verbose=True):
             skipped.append((sub, exp, sess, 'missing logs'))
             continue
 
-        rows, latency_ms, host_dur, task_by_type, host_by_type = score_session(
-            task_path, host_path)
+        (rows, latency_ms, host_dur, task_by_type, host_by_type,
+         host_events_all) = score_session(task_path, host_path,
+                                          include_heartbeats=include_heartbeats)
         if not rows:
             if verbose:
                 print(f'-- SKIP: no scored pairs '
@@ -299,10 +314,11 @@ def score_all_sessions(qualifying, verbose=True):
                   f'latency={latency_ms:.2f} ms, host_dur={host_dur:.1f}s')
 
         session_event_cache[(sub, exp, sess)] = {
-            'task_by_type': task_by_type,
-            'host_by_type': host_by_type,
-            'host_dur':     host_dur,
-            'latency_ms':   latency_ms,
+            'task_by_type':    task_by_type,
+            'host_by_type':    host_by_type,
+            'host_events_all': host_events_all,
+            'host_dur':        host_dur,
+            'latency_ms':      latency_ms,
         }
 
         for r in rows:
@@ -544,8 +560,13 @@ def drill_top_candidate(agg, all_pairs_df):
 
 # ===== Regression helpers =====
 
-def _pull_pair(candidate, session_event_cache):
-    """Return (t, h) numpy arrays for a candidate, or (None, None) if missing."""
+def _pull_pair(candidate, session_event_cache, min_n=3):
+    """Return (t, h) numpy arrays for a candidate, or (None, None) if missing.
+
+    `min_n` is the minimum number of paired events required. Defaults to 3
+    (needed for regression). Residual/drift evaluation passes min_n=1 so
+    singleton handshake pairs (READY, SESSION, EXIT, ...) survive.
+    """
     key = (candidate['subject'], candidate['experiment'], candidate['session'])
     cache = session_event_cache.get(key)
     if cache is None:
@@ -553,7 +574,7 @@ def _pull_pair(candidate, session_event_cache):
     t_times = cache['task_by_type'].get(candidate['task_type'], [])
     h_times = cache['host_by_type'].get(candidate['host_type'], [])
     n = min(len(t_times), len(h_times))
-    if n < 3:
+    if n < min_n:
         return None, None
     t = np.asarray(t_times[:n], dtype=float)
     h = np.asarray(h_times[:n], dtype=float)
@@ -565,6 +586,10 @@ def fit_candidate(candidate, session_event_cache, regressor='ransac',
                   fits_df=None, label=None):
     """Fit a chosen regressor on one candidate's paired task/host timestamps.
 
+    Fits `task = slope * host + offset` (host is the input we'll have at
+    correction time from `event.log`; task is what we want to recover).
+    The RANSAC inlier threshold is therefore applied in task-ms.
+
     Returns (fit_dict, fits_df).
       - fit_dict: slope, offset, inlier_mask, t, h, plus ids + summary stats.
                   None if the candidate has <3 paired events or the fit failed.
@@ -575,25 +600,25 @@ def fit_candidate(candidate, session_event_cache, regressor='ransac',
     if t is None:
         return None, (fits_df if fits_df is not None else pd.DataFrame())
 
-    X = t.reshape(-1, 1)
+    X = h.reshape(-1, 1)
     try:
         if regressor == 'ransac':
             est = RANSACRegressor(estimator=_LR(),
                                   residual_threshold=inlier_threshold_ms,
                                   random_state=0)
-            est.fit(X, h)
+            est.fit(X, t)
             slope  = float(est.estimator_.coef_[0])
             offset = float(est.estimator_.intercept_)
             inlier_mask = est.inlier_mask_.copy()
         elif regressor == 'linear':
-            est = _LR().fit(X, h)
+            est = _LR().fit(X, t)
             slope, offset = float(est.coef_[0]), float(est.intercept_)
-            residuals_tmp = h - (slope * t + offset)
+            residuals_tmp = t - (slope * h + offset)
             inlier_mask = np.abs(residuals_tmp) <= inlier_threshold_ms
         elif regressor == 'theilsen':
-            est = _TS(random_state=0).fit(X, h)
+            est = _TS(random_state=0).fit(X, t)
             slope, offset = float(est.coef_[0]), float(est.intercept_)
-            residuals_tmp = h - (slope * t + offset)
+            residuals_tmp = t - (slope * h + offset)
             inlier_mask = np.abs(residuals_tmp) <= inlier_threshold_ms
         else:
             raise ValueError(f'unknown regressor: {regressor!r}')
@@ -601,7 +626,7 @@ def fit_candidate(candidate, session_event_cache, regressor='ransac',
         print(f'fit failed for {candidate}: {e}')
         return None, (fits_df if fits_df is not None else pd.DataFrame())
 
-    residuals = h - (slope * t + offset)
+    residuals = t - (slope * h + offset)
     rms_all     = float(np.sqrt((residuals ** 2).mean()))
     rms_inliers = (float(np.sqrt((residuals[inlier_mask] ** 2).mean()))
                    if inlier_mask.any() else float('nan'))
@@ -640,8 +665,12 @@ def fit_candidate(candidate, session_event_cache, regressor='ransac',
 
 def compute_residuals(t, h, slope, offset,
                       inlier_threshold_ms=RANSAC_INLIER_MS):
-    """Low-level: compute residuals = h - (slope * t + offset) and the
+    """Low-level: compute residuals = t - (slope * h + offset) and the
     in-band mask (|residual| <= threshold). Pure function; no I/O.
+
+    The fit is `task = slope * host + offset` (the inverted direction
+    used throughout the pipeline since the host log is the input). The
+    residual is in task-ms.
 
     Use this when you already have t, h, slope, offset in hand (e.g. a
     fit_dict from fit_candidate). Use recalculate_residuals(...) when you
@@ -649,7 +678,7 @@ def compute_residuals(t, h, slope, offset,
     """
     t = np.asarray(t, dtype=float)
     h = np.asarray(h, dtype=float)
-    residuals = h - (slope * t + offset)
+    residuals = t - (slope * h + offset)
     in_band = np.abs(residuals) <= inlier_threshold_ms
     rms_in = (float(np.sqrt((residuals[in_band] ** 2).mean()))
               if in_band.any() else float('nan'))
@@ -709,8 +738,9 @@ def plot_residuals(recalc, ax=None, title=None):
 
 
 def plot_pair_with_fit(fit, recalc, ax=None, title=None):
-    """Plot target's paired (task, host) events with fit's regression line
-    overlaid. Points colored by in_band (residual under fit)."""
+    """Plot target's paired (host, task) events with fit's regression line
+    overlaid (fit: `task = slope * host + offset`). Points colored by
+    in_band (residual under fit)."""
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 4.5))
     else:
@@ -724,17 +754,17 @@ def plot_pair_with_fit(fit, recalc, ax=None, title=None):
     t_rel   = (t - t0) / 1000.0
     h_rel   = (h - h0) / 1000.0
 
-    ax.scatter(t_rel[in_band],  h_rel[in_band],
+    ax.scatter(h_rel[in_band],  t_rel[in_band],
                c='C0', s=10, alpha=0.6, label=f'inlier (n={in_band.sum()})')
-    ax.scatter(t_rel[~in_band], h_rel[~in_band],
+    ax.scatter(h_rel[~in_band], t_rel[~in_band],
                c='C3', s=14, alpha=0.7, label=f'outlier (n={(~in_band).sum()})')
-    t_fit_abs = np.array([t.min(), t.max()])
-    h_fit_abs = slope * t_fit_abs + offset
+    h_fit_abs = np.array([h.min(), h.max()])
+    t_fit_abs = slope * h_fit_abs + offset
     fit_label = f"fit from {fit.get('label') or fit['task_type']}<->{fit['host_type']}"
-    ax.plot((t_fit_abs - t0) / 1000.0, (h_fit_abs - h0) / 1000.0,
+    ax.plot((h_fit_abs - h0) / 1000.0, (t_fit_abs - t0) / 1000.0,
             'k-', lw=0.8, label=fit_label)
-    ax.set_xlabel('reltime task (s)')
-    ax.set_ylabel('reltime host (s)')
+    ax.set_xlabel('reltime host (s)')
+    ax.set_ylabel('reltime task (s)')
     ax.set_title(title or f'Paired (host, task) events over fit line\nslope = {slope:.9f}')
     ax.legend(fontsize=9)
     ax.grid(alpha=0.3)
@@ -943,10 +973,16 @@ def plot_slope_distribution(corrections_eval, unambiguous, *, anchor=None):
             sel = ok[(ok['experiment'] == exp) &
                      (ok['task_type']  == c['task_type']) &
                      (ok['host_type']  == c['host_type'])]
+            slopes = sel['slope'].to_numpy(dtype=float)
             ax = axes[i, 0]
-            ax.hist(sel['slope'], bins=20, alpha=0.7)
+            ax.hist(slopes, bins=20, alpha=0.7)
             ax.ticklabel_format(useOffset=False, style='plain', axis='x')
-            ax.axvline(1.0, color='k', linestyle='--', linewidth=0.7)
+            ax.axvline(1.0, color='k', linestyle='--', linewidth=0.7,
+                       label='no-drift (slope=1)')
+            med = float(np.median(slopes)) if slopes.size else float('nan')
+            if np.isfinite(med):
+                ax.axvline(med, color='C3', linestyle='-', linewidth=1.2,
+                           label=f'median = {med:.6f}')
             ax.set_xlabel('regression slope')
             ax.set_ylabel('# sessions')
             anchor_tag = '  (anchor — applied to all messages)' if anchor is not None else ''
@@ -954,14 +990,89 @@ def plot_slope_distribution(corrections_eval, unambiguous, *, anchor=None):
                 f'{c["task_type"]} <-> {c["host_type"]}  '
                 f'(n_sess={len(sel)}){anchor_tag}',
                 fontsize=10)
+            ax.legend(fontsize=8, loc='best')
             ax.grid(alpha=0.3)
         fig.suptitle(
-            f'RANSAC slope distribution (time_task -> time_host)  |  {exp}',
+            f'RANSAC slope distribution (time_host -> time_task)  |  {exp}',
             fontsize=12, y=1.02)
         plt.tight_layout()
         plt.show()
 
 
+def plot_outliers_per_candidate(nh_fits, top_candidates=None, *,
+                                save=True, save_dir=HEARTBEAT_DIR):
+    """One figure per experiment: bar plot of median `n_outliers` per
+    session per candidate, with per-session points overlaid (jittered).
+
+    `nh_fits` already carries `n_outliers` (built by build_corrections_eval).
+    `top_candidates` restricts the candidate set, mirroring the other plots.
+    Bars are sorted by median descending, so the worst candidate is
+    leftmost.
+    """
+    if nh_fits is None or nh_fits.empty:
+        print('No nh_fits - nothing to plot.')
+        return []
+    if 'n_outliers' not in nh_fits.columns:
+        raise ValueError("nh_fits missing 'n_outliers' column")
+
+    fits = _filter_to_top_candidates(nh_fits, top_candidates)
+    if fits.empty:
+        print('No candidates after top_candidates filter.')
+        return []
+
+    saved_paths = []
+    for exp, grp in fits.groupby('experiment', sort=False):
+        cand_stats = (grp.groupby(['task_type', 'host_type'])['n_outliers']
+                         .agg(['median', 'count',
+                               lambda s: float(np.percentile(s, 25)),
+                               lambda s: float(np.percentile(s, 75))])
+                         .rename(columns={'<lambda_0>': 'q25',
+                                          '<lambda_1>': 'q75'})
+                         .sort_values('median', ascending=False)
+                         .reset_index())
+        if cand_stats.empty:
+            continue
+
+        labels = [f'{r["task_type"]} ↔ {r["host_type"]}'
+                  for _, r in cand_stats.iterrows()]
+        x = np.arange(len(cand_stats))
+        medians = cand_stats['median'].to_numpy(dtype=float)
+        yerr = np.vstack([medians - cand_stats['q25'].to_numpy(dtype=float),
+                          cand_stats['q75'].to_numpy(dtype=float) - medians])
+
+        fig, ax = plt.subplots(figsize=(max(6, 1.5 * len(cand_stats)), 4.5))
+        ax.bar(x, medians, yerr=yerr, capsize=4, color='C3',
+               alpha=0.7, edgecolor='k', linewidth=0.6,
+               label='median ± IQR')
+
+        rng = np.random.default_rng(0)
+        for xi, (_, c) in zip(x, cand_stats.iterrows()):
+            sess_vals = grp[(grp['task_type'] == c['task_type']) &
+                            (grp['host_type'] == c['host_type'])]['n_outliers']
+            sess_vals = sess_vals.to_numpy(dtype=float)
+            if sess_vals.size == 0:
+                continue
+            jitter = rng.uniform(-0.15, 0.15, size=sess_vals.size)
+            ax.scatter(np.full_like(sess_vals, xi) + jitter, sess_vals,
+                       s=14, color='k', alpha=0.5, zorder=3)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=30, ha='right')
+        ax.set_ylabel(f'n_outliers per session  (resid > {RANSAC_INLIER_MS:g} ms)')
+        ax.set_title(f'RANSAC outliers per candidate  |  {exp}  |  '
+                     f'{int(cand_stats["count"].sum())} session-candidate fits',
+                     fontsize=11)
+        ax.grid(alpha=0.3, axis='y')
+        ax.legend(loc='upper right', fontsize=8)
+        plt.tight_layout()
+
+        if save:
+            sub_dir = os.path.join(save_dir, 'outliers_per_candidate')
+            name = f'outliers_per_candidate_{_safe_name(exp)}'
+            saved_paths.append(_save_fig(fig, name, save_dir=sub_dir))
+        plt.show()
+
+    return saved_paths
 
 
 # ===== Compared-to-GT (heartbeat-based ground-truth) =====
@@ -991,9 +1102,10 @@ def _filter_to_top_candidates(df, top_candidates):
 
 def _slope_eff_outliers_only(t, h, slope_nh, offset_nh,
                              inlier_threshold_ms=RANSAC_INLIER_MS):
-    """For outliers_only mode: snap outliers to the non-heart fit line,
-    keep inliers as raw h, then refit a slope through the partially-
-    corrected (t, corrected_h). Returns (slope_eff, inlier_frac)."""
+    """For outliers_only mode: snap outliers to the non-heart fit line
+    (`task = slope_nh * host + offset_nh`), keep inliers as raw t, then
+    refit a slope through the partially-corrected (h, corrected_t).
+    Returns (slope_eff, inlier_frac)."""
     t = np.asarray(t, dtype=float)
     h = np.asarray(h, dtype=float)
     if len(t) < 2:
@@ -1001,9 +1113,9 @@ def _slope_eff_outliers_only(t, h, slope_nh, offset_nh,
     recalc = compute_residuals(t, h, slope_nh, offset_nh,
                                inlier_threshold_ms=inlier_threshold_ms)
     inlier_mask = np.asarray(recalc['in_band'], dtype=bool)
-    corrected_h = np.where(inlier_mask, h, slope_nh * t + offset_nh)
-    # Least-squares slope through corrected_h vs t.
-    slope_eff, _intercept = np.polyfit(t, corrected_h, 1)
+    corrected_t = np.where(inlier_mask, t, slope_nh * h + offset_nh)
+    # Least-squares slope through corrected_t vs h.
+    slope_eff, _intercept = np.polyfit(h, corrected_t, 1)
     return float(slope_eff), float(inlier_mask.mean())
 
 
@@ -1321,17 +1433,17 @@ def compute_per_candidate_vs_gt(unambiguous, session_event_cache, gt_corrections
         nh_slope = nh_offset = None
         inlier_mask = np.ones_like(t, dtype=bool)
         if mode == 'all_events':
-            corrected_h = h
+            corrected_t = t
         else:  # outliers_only
             nh_slope = float(r['slope'])
             nh_offset = float(r['offset'])
             recalc = compute_residuals(t, h, nh_slope, nh_offset,
                                        inlier_threshold_ms=inlier_threshold_ms)
             inlier_mask = recalc['in_band']
-            corrected_h = _corrected_h(t, h, nh_slope, nh_offset,
+            corrected_t = _corrected_t(t, h, nh_slope, nh_offset,
                                        inlier_mask, mode='outliers_only')
 
-        residuals = corrected_h - (gt_slope * t + gt_offset)
+        residuals = corrected_t - (gt_slope * h + gt_offset)
         in_band = np.abs(residuals) <= inlier_threshold_ms
         rms = float(np.sqrt((residuals ** 2).mean())) if len(residuals) else float('nan')
         rms_inliers = (float(np.sqrt((residuals[in_band] ** 2).mean()))
@@ -1345,7 +1457,7 @@ def compute_per_candidate_vs_gt(unambiguous, session_event_cache, gt_corrections
             'session':              session,
             't':                    t,
             'h':                    h,
-            'corrected_h':          corrected_h,
+            'corrected_t':          corrected_t,
             'residuals':            residuals,
             'in_band':              in_band,
             'inlier_mask':          inlier_mask,
@@ -1448,13 +1560,18 @@ def plot_per_candidate_vs_gt(event_residuals, residual_summary, top_candidates,
                 is_inlier = evt['is_inlier_nh'].to_numpy(dtype=bool)
                 color = cmap(i % 10)
                 lbl = f'{ev["task_type"]}/{ev["host_type"]}'
+                # Attach `lbl` to whichever scatter draws first so the event
+                # type lands in the legend exactly once, even if all events
+                # of this type are outliers (e.g. EXIT firing at session end).
+                inlier_lbl  = lbl if is_inlier.any() else None
+                outlier_lbl = lbl if not is_inlier.any() and (~is_inlier).any() else None
                 if is_inlier.any():
                     ax.scatter(tt[is_inlier], rr[is_inlier], s=18,
-                               color=color, alpha=0.6, label=lbl)
+                               color=color, alpha=0.6, label=inlier_lbl)
                 if (~is_inlier).any():
                     ax.scatter(tt[~is_inlier], rr[~is_inlier], s=28,
                                color=color, alpha=0.85, marker='x',
-                               linewidths=1.0)
+                               linewidths=1.0, label=outlier_lbl)
             ax.axhline(0, color='k', linestyle='--', alpha=0.6)
             ax.axhline( abs_threshold_ms, color='r', linestyle=':', alpha=0.4)
             ax.axhline(-abs_threshold_ms, color='r', linestyle=':', alpha=0.4)
@@ -2259,13 +2376,15 @@ def plot_per_candidate_corrections(corrections_eval, unambiguous,
             slope  = float(rep['slope'])
             offset = float(rep['offset'])
 
-            t0 = t_times[0]
-            eegoffset_orig    = (t_times - t0) * sfreq / 1000.0
+            # Fit is task = slope * host + offset; visualize the correction
+            # by feeding host event times in and showing the delta produced.
+            h0 = h_times[0]
+            eegoffset_orig    = (h_times - h0) * sfreq / 1000.0
             eegoffset_corr    = eegoffset_orig * slope
             delta_eegoffset   = eegoffset_corr - eegoffset_orig
 
-            mstime_orig       = t_times
-            mstime_corr       = slope * t_times + offset
+            mstime_orig       = h_times
+            mstime_corr       = slope * h_times + offset
             delta_mstime      = mstime_corr - mstime_orig
             rel_delta_mstime  = delta_mstime - delta_mstime[0]
 
@@ -2280,7 +2399,7 @@ def plot_per_candidate_corrections(corrections_eval, unambiguous,
                 f'eegoffset correction (slope-only)\nslope = {slope:.9f}')
             axes[0].grid(alpha=0.3)
 
-            axes[1].plot(t_times - t0, rel_delta_mstime, '.', alpha=0.6)
+            axes[1].plot(h_times - h0, rel_delta_mstime, '.', alpha=0.6)
             axes[1].axhline(0, color='k', linestyle='--', alpha=0.5)
             axes[1].set_xlabel('event time since session start (ms)')
             axes[1].set_ylabel('relative Delta mstime (ms, offset removed)')
@@ -2365,7 +2484,7 @@ def plot_pooled_residual_hist(corrections_eval, unambiguous, session_event_cache
         plt.ylabel('# events')
         plt.legend()
         plt.title(
-            f'Pooled per-event residuals: time_host - (slope*time_task + offset) \n  '
+            f'Pooled per-event residuals: time_task - (slope*time_host + offset) \n  '
             f'{c["experiment"]}  |  {c["task_type"]} <-> {c["host_type"]}  |  '
             f'{pct_over:.2f}% > {abs_threshold_ms} ms  |  n_evs={pooled.size}')
         plt.grid(alpha=0.3)
@@ -2396,8 +2515,11 @@ def build_gt_fits(prepared_by_sess, samplerates_by_sess=None, *,
     """Heartbeat-based ground-truth fit per session, packaged as a DataFrame.
 
     Plain OLS on each session's filtered merged heartbeats (already restricted
-    upstream to one-way latency <= 1 ms), with `offset` adjusted by the median
-    one-way latency the same way the original inline cell did.
+    upstream to one-way latency <= 1 ms), fitting `time_task = slope *
+    time_host + offset_raw`. The raw fit relates task time-of-send to host
+    time-of-receipt, which is biased by ~one-way latency. The latency
+    correction adds the median one-way latency to recover a fit that
+    matches task and host at the same wall-clock moment.
 
     `prepared_by_sess` is the {(sub, exp, sess, orig_sess) -> {merged_df, ...}}
     dict built in the notebook by prepare_merged_heartbeats. `samplerates_by_sess`
@@ -2417,13 +2539,13 @@ def build_gt_fits(prepared_by_sess, samplerates_by_sess=None, *,
         md = prep.get('merged_df')
         if md is None or len(md) < min_heartbeats:
             continue
-        x = md[['time_task']].astype(float)
-        y = md['time_host'].astype(float)
+        x = md[['time_host']].astype(float)
+        y = md['time_task'].astype(float)
         lr = _LR().fit(x, y)
         slope          = float(lr.coef_[0])
         offset_raw     = float(lr.intercept_)
         median_one_way = float(md['one_way_latency_ms'].median())
-        offset         = offset_raw - median_one_way
+        offset         = offset_raw + median_one_way
         residuals      = y.to_numpy() - (slope * x.to_numpy().ravel() + offset_raw)
         rms_residual   = float(np.sqrt((residuals ** 2).mean())) if len(residuals) else float('nan')
 
@@ -2444,7 +2566,8 @@ def build_gt_fits(prepared_by_sess, samplerates_by_sess=None, *,
 
 
 def build_event_residuals(top_candidates, session_event_cache, nh_fits, gt_fits, *,
-                          inlier_threshold_ms=RANSAC_INLIER_MS):
+                          inlier_threshold_ms=RANSAC_INLIER_MS,
+                          event_pairs=None):
     """Long event-level DataFrame: one row per
     (fit_candidate, event_candidate, session, condition, event_idx).
 
@@ -2456,20 +2579,21 @@ def build_event_residuals(top_candidates, session_event_cache, nh_fits, gt_fits,
 
     For each (fit, event_type, session):
         - look up (slope_nh, offset_nh) for the FIT candidate from `nh_fits`
+          (fit direction: `task = slope_nh * host + offset_nh`)
         - pull (t, h) of the EVENT candidate from session_event_cache
-        - inlier_mask: |h - (slope_nh*t + offset_nh)| <= inlier_threshold_ms
-        - corrected_h variants:
-            before          : h
-            after_all       : slope_nh*t + offset_nh             (every event snapped)
-            after_outliers  : where(inlier_mask, h, slope_nh*t + offset_nh)
-        - residual_ms     = corrected_h - (slope_gt*t + offset_gt)
+        - inlier_mask: |t - (slope_nh*h + offset_nh)| <= inlier_threshold_ms
+        - corrected_t variants:
+            before          : t
+            after_all       : slope_nh*h + offset_nh             (every event snapped)
+            after_outliers  : where(inlier_mask, t, slope_nh*h + offset_nh)
+        - residual_ms     = corrected_t - (slope_gt*h + offset_gt)   (task-ms)
 
     Columns:
         experiment, subject, session,
         fit_task_type, fit_host_type,
         task_type, host_type,
         condition, event_idx,
-        t, h, corrected_h, residual_ms, is_inlier_nh.
+        t, h, corrected_t, residual_ms, is_inlier_nh.
     """
     if (top_candidates is None or top_candidates.empty or
             nh_fits is None or nh_fits.empty or
@@ -2485,10 +2609,16 @@ def build_event_residuals(top_candidates, session_event_cache, nh_fits, gt_fits,
           .rename(columns={'slope': 'slope_gt', 'offset': 'offset_gt'})
           .dropna(subset=['slope_gt', 'offset_gt']))
 
-    # Event-candidate set: same as the set of candidates we have fits for
-    # (they're drawn from the same top_candidates).
-    event_cands = (top_candidates[['experiment', 'task_type', 'host_type']]
-                   .drop_duplicates().reset_index(drop=True))
+    # Event-candidate set: defaults to top_candidates (fit anchors), but can be
+    # overridden via `event_pairs` to evaluate residuals on a broader pair list
+    # than the anchors we fit on (e.g. include singleton handshake events,
+    # stim events). task_type=None rows (host-only events) are dropped here
+    # because residuals require a task partner.
+    src = event_pairs if event_pairs is not None else top_candidates
+    event_cands = (src[['experiment', 'task_type', 'host_type']]
+                   .drop_duplicates()
+                   .dropna(subset=['task_type'])
+                   .reset_index(drop=True))
 
     chunks = []
     for _, fit_row in fits.iterrows():
@@ -2510,21 +2640,23 @@ def build_event_residuals(top_candidates, session_event_cache, nh_fits, gt_fits,
                       'session':    sess,
                       'task_type':  ec['task_type'],
                       'host_type':  ec['host_type']}
-            t, h = _pull_pair(target, session_event_cache)
+            # min_n=1: keep singleton handshake pairs (READY, SESSION, EXIT)
+            # in residual evaluation. Residuals are well-defined for n>=1.
+            t, h = _pull_pair(target, session_event_cache, min_n=1)
             if t is None:
                 continue
-            nh_pred = slope_nh * t + offset_nh
-            gt_pred = slope_gt * t + offset_gt
-            inlier_mask = np.abs(h - nh_pred) <= inlier_threshold_ms
+            nh_pred = slope_nh * h + offset_nh
+            gt_pred = slope_gt * h + offset_gt
+            inlier_mask = np.abs(t - nh_pred) <= inlier_threshold_ms
 
-            ch_variants = {
-                'before':         h,
-                'after_all':      _corrected_h(t, h, slope_nh, offset_nh,
+            ct_variants = {
+                'before':         t,
+                'after_all':      _corrected_t(t, h, slope_nh, offset_nh,
                                                inlier_mask, 'all_events'),
-                'after_outliers': _corrected_h(t, h, slope_nh, offset_nh,
+                'after_outliers': _corrected_t(t, h, slope_nh, offset_nh,
                                                inlier_mask, 'outliers_only'),
             }
-            for cond, ch in ch_variants.items():
+            for cond, ct in ct_variants.items():
                 chunks.append(pd.DataFrame({
                     'experiment':    exp,
                     'subject':       sub,
@@ -2537,8 +2669,8 @@ def build_event_residuals(top_candidates, session_event_cache, nh_fits, gt_fits,
                     'event_idx':     np.arange(len(t), dtype=int),
                     't':             t,
                     'h':             h,
-                    'corrected_h':   ch,
-                    'residual_ms':   ch - gt_pred,
+                    'corrected_t':   ct,
+                    'residual_ms':   ct - gt_pred,
                     'is_inlier_nh':  inlier_mask,
                 }))
 
@@ -2576,7 +2708,8 @@ def build_residual_summary(event_residuals):
 
 def build_drift_df(nh_fits, gt_fits, session_event_cache, *,
                    top_candidates=None, sess_seconds=SESS_SECONDS,
-                   inlier_threshold_ms=RANSAC_INLIER_MS):
+                   inlier_threshold_ms=RANSAC_INLIER_MS,
+                   event_pairs=None):
     """Long drift DataFrame: one row per
     (fit_candidate, event_candidate, session, mode, condition).
 
@@ -2595,12 +2728,15 @@ def build_drift_df(nh_fits, gt_fits, session_event_cache, *,
             after,  all_events       : (slope_lr_all - 1) * sess_seconds * 1000
             after,  outliers_only    : (slope_lr_out - 1) * sess_seconds * 1000
 
-    `slope_nh` is the FIT candidate's RANSAC fit slope for that session.
+    `slope_nh` is the FIT candidate's RANSAC fit slope for that session
+    (`task = slope_nh * host + offset_nh`). Slope is now task-ms-per-host-ms;
+    `slope - 1 ≈ -3.5e-5` for typical sessions (sign flipped from the
+    old host-on-task direction).
     `slope_lr_all` is an OLS (linear regression, not RANSAC) refit on
-    (t, slope_nh*t + offset_nh), i.e. all events snapped to the RANSAC fit
+    (h, slope_nh*h + offset_nh), i.e. all events snapped to the RANSAC fit
     line; numerically equal to slope_nh.
-    `slope_lr_out` is an OLS refit on (t, corrected_h_outliers_only), where
-    outliers are snapped to slope_nh*t+offset_nh and inliers keep raw h.
+    `slope_lr_out` is an OLS refit on (h, corrected_t_outliers_only), where
+    outliers are snapped to slope_nh*h+offset_nh and inliers keep raw t.
     (t, h) is the EVENT candidate's events and slope_nh/offset_nh are the
     FIT candidate's NH fit for that session.
     `drift_samples_* = drift_ms_* * samplerate / 1000` when gt_fits has a
@@ -2622,7 +2758,13 @@ def build_drift_df(nh_fits, gt_fits, session_event_cache, *,
           .rename(columns={'slope': 'slope_gt'})
           .dropna(subset=['slope_gt']))
 
-    if top_candidates is None or top_candidates.empty:
+    # Event-candidate set: defaults to top_candidates (fit anchors), but
+    # can be overridden via `event_pairs`. task_type=None rows (host-only
+    # events) are dropped because slope_lr_* needs a paired task series.
+    if event_pairs is not None:
+        event_cands = (event_pairs[['experiment', 'task_type', 'host_type']]
+                       .drop_duplicates().dropna(subset=['task_type']))
+    elif top_candidates is None or top_candidates.empty:
         event_cands = fits[['experiment', 'task_type', 'host_type']].drop_duplicates()
     else:
         event_cands = top_candidates[['experiment', 'task_type', 'host_type']].drop_duplicates()
@@ -2651,14 +2793,16 @@ def build_drift_df(nh_fits, gt_fits, session_event_cache, *,
                       'session':    sess,
                       'task_type':  ec['task_type'],
                       'host_type':  ec['host_type']}
-            t, h = _pull_pair(target, session_event_cache)
+            # min_n=1: keep singletons; slope_lr_* will still be NaN for n<2
+            # (guarded just below).
+            t, h = _pull_pair(target, session_event_cache, min_n=1)
             if t is None or len(t) < 2:
                 slope_lr_all = float('nan')
                 slope_lr_out = float('nan')
             else:
-                t_arr = np.asarray(t, dtype=float)
-                corrected_all = slope_nh * t_arr + offset_nh
-                slope_lr_all = float(np.polyfit(t_arr, corrected_all, 1)[0])
+                h_arr = np.asarray(h, dtype=float)
+                corrected_all = slope_nh * h_arr + offset_nh
+                slope_lr_all = float(np.polyfit(h_arr, corrected_all, 1)[0])
                 slope_lr_out, _ = _slope_eff_outliers_only(
                     t, h, slope_nh, offset_nh,
                     inlier_threshold_ms=inlier_threshold_ms)
@@ -2703,6 +2847,68 @@ def build_drift_df(nh_fits, gt_fits, session_event_cache, *,
                              'drift_samples_abs': drift_samples_abs})
 
     return pd.DataFrame(rows)
+
+
+def build_corrected_host_events(nh_fits, session_event_cache, *,
+                                top_candidates=None):
+    """Apply each per-(candidate, session) NH fit to every host-PC event
+    in the session's `event.log`. Long DataFrame, one row per
+    (session, host event, candidate fit).
+
+    Columns:
+        subject, experiment, session,
+        host_event_idx, host_event_type, host_time_raw,
+        fit_task_type, fit_host_type, slope_nh, offset_nh,
+        t_corrected
+
+    `t_corrected = slope_nh * host_time_raw + offset_nh` -- forward fit
+    (`task = slope_nh * host + offset_nh`) that maps each host timestamp
+    onto the task clock. `host_events_all` is sourced from
+    `session_event_cache[(sub, exp, sess)]['host_events_all']`
+    (populated by `score_all_sessions`).
+    """
+    if nh_fits is None or nh_fits.empty or not session_event_cache:
+        return pd.DataFrame()
+
+    fits = nh_fits.dropna(subset=['slope', 'offset']).copy()
+    fits = _filter_to_top_candidates(fits, top_candidates)
+    if fits.empty:
+        return pd.DataFrame()
+
+    chunks = []
+    for _, row in fits.iterrows():
+        key = (row['subject'], row['experiment'], int(row['session']))
+        cache = session_event_cache.get(key)
+        if cache is None:
+            continue
+        events = cache.get('host_events_all')
+        if not events:
+            continue
+
+        slope_nh  = float(row['slope'])
+        offset_nh = float(row['offset'])
+
+        types = [t for t, _ in events]
+        h_raw = np.asarray([ts for _, ts in events], dtype=float)
+        t_corrected = slope_nh * h_raw + offset_nh
+
+        chunks.append(pd.DataFrame({
+            'subject':         key[0],
+            'experiment':      key[1],
+            'session':         key[2],
+            'host_event_idx':  np.arange(len(events), dtype=int),
+            'host_event_type': types,
+            'host_time_raw':   h_raw,
+            'fit_task_type':   row['task_type'],
+            'fit_host_type':   row['host_type'],
+            'slope_nh':        slope_nh,
+            'offset_nh':       offset_nh,
+            't_corrected':     t_corrected,
+        }))
+
+    if not chunks:
+        return pd.DataFrame()
+    return pd.concat(chunks, ignore_index=True)
 
 
 def _residual_summary_to_mode_long(residual_summary):
