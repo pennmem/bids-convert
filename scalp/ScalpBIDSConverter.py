@@ -3,6 +3,7 @@ import mne
 import numpy as np
 import pandas as pd
 import os
+import sys
 import json
 from glob import glob
 import shutil
@@ -10,6 +11,13 @@ import mne_bids
 import cmlreaders as cml
 import mne
 import time
+import pyedflib
+
+# edf_digital_writer lives under intracranial/ — share it without a move.
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "intracranial")
+)
+from edf_digital_writer import write_digital, resolve_edf_units  # noqa: E402
 
 class UnknownElectrodeCapError(Exception):
     pass
@@ -256,18 +264,10 @@ class ScalpBIDSConverter:
                   f"{self.subject}, {self.experiment}, session {self.session}: {exc}")
             return
 
-        # ---------- EEG (re-encode + mne_bids writes everything) ----------
+        # ---------- EEG (direct pyedflib write, no MNE round-trip) ----------
         if run_eeg:
             try:
-                # Temp EDF goes in the current user's home dir so the
-                # script works regardless of which user runs it (e.g.
-                # RAM_maint cannot write under /home1/zrentala/).
-                temp_dir = os.path.join(os.path.expanduser("~"), ".temp")
-                os.makedirs(temp_dir, exist_ok=True)
-                temp_edf = os.path.join(
-                    temp_dir, f"{int(time.time() * 100)}_{os.getpid()}_temp.edf"
-                )
-                self.write_bids_eeg(temp_path=temp_edf, overwrite=eeg_overwrite)
+                self.write_bids_eeg(overwrite=eeg_overwrite)
                 self._mark_stage('eeg', 'ok')
             except Exception as exc:
                 self._mark_stage('eeg', 'failed', exc)
@@ -746,64 +746,155 @@ class ScalpBIDSConverter:
         with open(bids_path.update(suffix="beh", extension=".json").fpath, "w") as f:
             json.dump(fp=f, obj = self.events_descriptor)
     
-    def write_bids_eeg(self, temp_path="temp.edf", overwrite=True):
-        task_name = self.experiment.lower() 
-        bids_path = mne_bids.BIDSPath(subject=self.subject,
-                                          session=str(self.session),
-                                          task=task_name,
-                                          datatype="eeg",
-                                          root=self.root)
+    def write_bids_eeg(self, overwrite=True):
+        """Write the EEG file as a bit-exact digital copy of the source.
+
+        BDF inputs are read with ``pyedflib`` and written back via
+        ``write_digital(container="BDF")`` — the on-disk digital int24
+        samples and per-channel ``(pmin, pmax, dmin, dmax, dim)`` headers
+        match the source byte-for-byte. EGI ``.raw`` / ``.mff`` inputs
+        must still be decoded by MNE (pyedflib cannot read EGI), but the
+        EDF write goes straight through pyedflib — no
+        ``mne.export.export_raw`` round-trip, no ``mne_bids.write_raw_bids``.
+        """
+        task_name = self.experiment.lower()
+        bids_path = mne_bids.BIDSPath(
+            subject=self.subject, session=str(self.session),
+            task=task_name, datatype="eeg", root=self.root,
+        )
+
+        if self.file_type == ".bdf":
+            out_path = self._write_eeg_from_bdf(bids_path)
+        else:
+            out_path = self._write_eeg_from_egi(bids_path)
+
+        # Channels / electrodes / coordsystem — unchanged.
+        self.write_bids_montage(overwrite=overwrite)
+
+        # Sidecar JSON — write directly (no mne_bids.update_sidecar_json).
+        sidecar_path = bids_path.copy().update(
+            suffix="eeg", extension=".json",
+        ).fpath
+        with open(sidecar_path, "w") as f:
+            json.dump(self.eeg_sidecar, f, indent=2)
+
+        # Events.
+        events_tsv = bids_path.copy().update(
+            suffix="events", extension=".tsv",
+        ).fpath
+        self.events.to_csv(events_tsv, sep="\t", index=False)
+        events_json = bids_path.copy().update(
+            suffix="events", extension=".json",
+        ).fpath
+        with open(events_json, "w") as f:
+            json.dump(self.events_descriptor, f)
+
+        # scans.tsv (mirrors intracranial _update_scans_tsv).
+        self._update_scans_tsv(out_path)
+
+    def _write_eeg_from_bdf(self, bids_path):
+        """True bit-exact copy: pyedflib → pyedflib, no MNE."""
+        src_bdf = self.raw_filepath
+        out_path = bids_path.copy().update(
+            suffix="eeg", extension=".bdf",
+        ).fpath
+        os.makedirs(out_path.parent, exist_ok=True)
+
+        f = pyedflib.EdfReader(str(src_bdf))
         try:
-            if self.file_type != ".bdf":
-                try:
-                    # EGI .raw / .mff carries stim/sync digital channels
-                    # (sync, D255, DIN1, ...) that EDF can't represent
-                    # cleanly. Drop them before exporting so the on-disk
-                    # EDF and channels.tsv carry the same EEG+EOG set.
-                    raw_for_export = self.raw_file.copy().pick(['eeg', 'eog'])
-                    mne.export.export_raw(temp_path, raw_for_export, add_ch_type=False)
-                    print("temp file created")
-                except FileExistsError as e:
-                    print(e)
-                edf_file = mne.io.read_raw_edf(temp_path, preload=False, infer_types=True)
-                # add_ch_type=False above means the EDF carries no per-
-                # channel type metadata, so infer_types defaulted every
-                # channel to 'eeg'. Copy the type assignments from the
-                # source raw (where set_montage already classified EOG
-                # / misc / stim) so set_montage and downstream
-                # channels.tsv keep the correct types.
-                src_types = dict(zip(self.raw_file.ch_names,
-                                     self.raw_file.get_channel_types()))
-                type_overrides = {
-                    ch: src_types[ch]
-                    for ch in edf_file.ch_names
-                    if ch in src_types and src_types[ch] != 'eeg'
-                }
-                if type_overrides:
-                    edf_file.set_channel_types(type_overrides)
-                edf_file.set_montage(self.montage, on_missing='warn')
-                mne_bids.write_raw_bids(
-                    edf_file,
-                    bids_path=bids_path,
-                    overwrite=overwrite
-                )
-                os.system(f"rm {temp_path}")
-                print("temp file removed")
-            else:
-                mne_bids.write_raw_bids(
-                    self.raw_file,
-                    events_data=None,
-                    bids_path=bids_path,
-                    overwrite=overwrite
-                )
-        except FileExistsError as e:
-            print(e)
-        self.events.to_csv(os.path.join(bids_path.directory, bids_path.basename+"_events.tsv"),
-                           sep="\t", index=False)
-        with open(bids_path.update(suffix="events", extension=".json").fpath, "w") as f:
-            json.dump(fp=f, obj = self.events_descriptor)
-        mne_bids.update_sidecar_json(bids_path.update(suffix="eeg", extension=".json"),
-                                     self.eeg_sidecar, verbose=True)
+            labels = list(f.getSignalLabels())
+            sfreq = float(f.getSampleFrequency(0))
+            n_samp = f.getNSamples()[0]
+            data_int = np.empty((len(labels), n_samp), dtype=np.int32)
+            for i in range(len(labels)):
+                data_int[i] = f.readSignal(i, digital=True).astype(np.int32)
+        finally:
+            f.close()
+
+        signal_units, _ = resolve_edf_units(
+            labels,
+            source_edf_path=str(src_bdf),
+            conversion_to_V=None,
+            container="BDF",
+            data_for_fallback=data_int,
+        )
+        write_digital(
+            str(out_path), labels, data_int, sfreq, signal_units,
+            container="BDF",
+        )
+        return out_path
+
+    def _write_eeg_from_egi(self, bids_path):
+        """EGI .raw / .mff: MNE decodes, pyedflib writes int16 EDF.
+
+        EGI stim/sync channels (sync, D255, DIN1, ...) can't go in EDF
+        cleanly, so we pick eeg+eog only — same set the channels.tsv
+        will list.
+        """
+        out_path = bids_path.copy().update(
+            suffix="eeg", extension=".edf",
+        ).fpath
+        os.makedirs(out_path.parent, exist_ok=True)
+
+        raw = self.raw_file.copy().pick(['eeg', 'eog'])
+        labels = list(raw.ch_names)
+        sfreq = float(raw.info['sfreq'])
+
+        # MNE returns Volts. Map the observed peak to ~32700 (small
+        # headroom) so we get the best int16 resolution per session.
+        data_v = raw.get_data()
+        peak = float(np.max(np.abs(data_v))) or 1e-6
+        gain_v_per_lsb = peak / 32700.0
+        data_int = np.clip(
+            np.round(data_v / gain_v_per_lsb), -32768, 32767,
+        ).astype(np.int16)
+
+        # Custom signal_units: pmin/pmax derived from the chosen gain.
+        # We bypass resolve_edf_units' 1 µV/LSB default because the EGI
+        # peak can sit well below 32 mV — using 1 µV/LSB would waste
+        # most of the int16 range. The 'uV' dimension is fine; the gain
+        # is encoded in (pmin, pmax) / (dmin, dmax).
+        dmin, dmax = -32768, 32767
+        pmin_uv = dmin * gain_v_per_lsb * 1e6
+        pmax_uv = dmax * gain_v_per_lsb * 1e6
+        signal_units = {
+            label: (float(pmin_uv), float(pmax_uv), dmin, dmax, "uV")
+            for label in labels
+        }
+        print(
+            f"  EGI digital write: peak={peak:.3e} V, "
+            f"gain={gain_v_per_lsb * 1e6:.4f} µV/LSB ({self.subject} "
+            f"{self.experiment} ses-{self.session})"
+        )
+
+        write_digital(
+            str(out_path), labels, data_int, sfreq, signal_units,
+            container="EDF",
+        )
+        return out_path
+
+    def _update_scans_tsv(self, eeg_file_path):
+        """Append a row for the new EEG file to ``scans.tsv``.
+
+        Ported verbatim from the intracranial converter — modality-agnostic.
+        """
+        scans_tsv = mne_bids.BIDSPath(
+            subject=self.subject,
+            session=str(self.session),
+            suffix="scans",
+            extension=".tsv",
+            root=self.root,
+        ).fpath
+        rel_path = os.path.relpath(eeg_file_path, scans_tsv.parent)
+        new_row = pd.DataFrame([{"filename": rel_path}])
+        if scans_tsv.exists():
+            existing = pd.read_csv(scans_tsv, sep="\t")
+            existing = existing[existing["filename"] != rel_path]
+            combined = pd.concat([existing, new_row], ignore_index=True)
+        else:
+            os.makedirs(scans_tsv.parent, exist_ok=True)
+            combined = new_row
+        combined.to_csv(scans_tsv, sep="\t", index=False)
 
     def write_bids_montage(self, overwrite=True):
         """Write only ``*_channels.tsv``, ``*_electrodes.tsv`` and
