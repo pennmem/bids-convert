@@ -17,7 +17,11 @@ import pyedflib
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "intracranial")
 )
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from edf_digital_writer import write_digital, resolve_edf_units  # noqa: E402
+from egi_digital_reader import (  # noqa: E402
+    read_egi_raw_digital, EGIPrecisionUnsupportedError,
+)
 
 class UnknownElectrodeCapError(Exception):
     pass
@@ -825,14 +829,20 @@ class ScalpBIDSConverter:
         return out_path
 
     def _write_eeg_from_egi(self, bids_path):
-        """EGI .raw / .mff: MNE decodes, pyedflib writes int16 EDF.
+        """EGI .raw / .mff → BDF.
 
-        EGI stim/sync channels (sync, D255, DIN1, ...) can't go in EDF
-        cleanly, so we pick eeg+eog only — same set the channels.tsv
-        will list.
+        Fast path (int16 .raw): read the EGI binary directly to recover
+        the source digital int16 samples and stream them into BDF —
+        bit-exact, no MNE requantization.
+
+        Fallback (float32/64 .raw, .mff): MNE decodes to Volts and we
+        requantize to int32 over BDF's full 24-bit range.
+
+        Stim/sync channels (sync, D255, DIN1, ...) are dropped in both
+        paths — channels.tsv already lists only the eeg+eog subset.
         """
         out_path = bids_path.copy().update(
-            suffix="eeg", extension=".edf",
+            suffix="eeg", extension=".bdf",
         ).fpath
         os.makedirs(out_path.parent, exist_ok=True)
 
@@ -840,37 +850,69 @@ class ScalpBIDSConverter:
         labels = list(raw.ch_names)
         sfreq = float(raw.info['sfreq'])
 
-        # MNE returns Volts. Map the observed peak to ~32700 (small
-        # headroom) so we get the best int16 resolution per session.
-        data_v = raw.get_data()
-        peak = float(np.max(np.abs(data_v))) or 1e-6
-        gain_v_per_lsb = peak / 32700.0
-        data_int = np.clip(
-            np.round(data_v / gain_v_per_lsb), -32768, 32767,
-        ).astype(np.int16)
+        used_digital_fast_path = False
+        if self.file_type == ".raw":
+            try:
+                data_all, cal_uV, _sfreq_raw, n_eeg = read_egi_raw_digital(
+                    self.raw_filepath
+                )
+            except EGIPrecisionUnsupportedError as exc:
+                print(
+                    f"  EGI digital fast path unavailable ({exc}); "
+                    f"falling back to requantize."
+                )
+            else:
+                # MNE names channels E1..E{n_eeg}; set_montage renamed E129 → Cz.
+                name_to_idx = {f"E{i + 1}": i for i in range(n_eeg)}
+                name_to_idx["Cz"] = 128
+                try:
+                    rows = [name_to_idx[lbl] for lbl in labels]
+                except KeyError as exc:
+                    raise RuntimeError(
+                        f"EGI digital path: label {exc} not in E1..E{n_eeg}/Cz"
+                    ) from exc
+                data_int = data_all[rows].astype(np.int32, copy=False)
+                dmin, dmax = -32768, 32767
+                pmin_uV = dmin * cal_uV
+                pmax_uV = dmax * cal_uV
+                signal_units = {
+                    lbl: (float(pmin_uV), float(pmax_uV), dmin, dmax, "uV")
+                    for lbl in labels
+                }
+                print(
+                    f"  EGI digital fast path: cal={cal_uV:.6f} µV/LSB "
+                    f"({self.subject} {self.experiment} ses-{self.session})"
+                )
+                write_digital(
+                    str(out_path), labels, data_int, sfreq, signal_units,
+                    container="BDF",
+                )
+                used_digital_fast_path = True
 
-        # Custom signal_units: pmin/pmax derived from the chosen gain.
-        # We bypass resolve_edf_units' 1 µV/LSB default because the EGI
-        # peak can sit well below 32 mV — using 1 µV/LSB would waste
-        # most of the int16 range. The 'uV' dimension is fine; the gain
-        # is encoded in (pmin, pmax) / (dmin, dmax).
-        dmin, dmax = -32768, 32767
-        pmin_uv = dmin * gain_v_per_lsb * 1e6
-        pmax_uv = dmax * gain_v_per_lsb * 1e6
-        signal_units = {
-            label: (float(pmin_uv), float(pmax_uv), dmin, dmax, "uV")
-            for label in labels
-        }
-        print(
-            f"  EGI digital write: peak={peak:.3e} V, "
-            f"gain={gain_v_per_lsb * 1e6:.4f} µV/LSB ({self.subject} "
-            f"{self.experiment} ses-{self.session})"
-        )
+        if not used_digital_fast_path:
+            data_v = raw.get_data()
+            peak = float(np.max(np.abs(data_v))) or 1e-6
+            dmin, dmax = -8388608, 8388607
+            gain_v_per_lsb = peak / 8_000_000
+            data_int = np.clip(
+                np.round(data_v / gain_v_per_lsb), dmin, dmax,
+            ).astype(np.int32)
+            pmin_uV = dmin * gain_v_per_lsb * 1e6
+            pmax_uV = dmax * gain_v_per_lsb * 1e6
+            signal_units = {
+                lbl: (float(pmin_uV), float(pmax_uV), dmin, dmax, "uV")
+                for lbl in labels
+            }
+            print(
+                f"  EGI requantize path: peak={peak:.3e} V, "
+                f"gain={gain_v_per_lsb * 1e6:.6f} µV/LSB "
+                f"({self.subject} {self.experiment} ses-{self.session})"
+            )
+            write_digital(
+                str(out_path), labels, data_int, sfreq, signal_units,
+                container="BDF",
+            )
 
-        write_digital(
-            str(out_path), labels, data_int, sfreq, signal_units,
-            container="EDF",
-        )
         return out_path
 
     def _update_scans_tsv(self, eeg_file_path):
