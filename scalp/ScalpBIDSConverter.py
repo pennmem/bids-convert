@@ -5,6 +5,7 @@ import pandas as pd
 import os
 import sys
 import json
+import inspect
 from glob import glob
 import shutil
 import mne_bids
@@ -195,7 +196,12 @@ class ScalpBIDSConverter:
             )
 
     def __init__(self, subject, experiment, session, root="/scratch/PEERS_BIDS/",
-                 overwrite_eeg=True, overwrite_beh=True, overrides=None):
+                 overwrite_eeg=True, overwrite_beh=True, overrides=None,
+                 force=False):
+        # force=False (default): any stage failure raises, aborting the run.
+        # force=True: failures are logged as warnings and the run continues,
+        #             matching the old best-effort behavior.
+        self.force = force
         self.root = root
         # The on-disk / CMLReader subject label may contain characters
         # BIDS forbids in entity values (e.g. 'LTP220_03'). Keep the
@@ -236,9 +242,8 @@ class ScalpBIDSConverter:
                 self.write_bids_beh(overwrite=beh_overwrite)
                 self._mark_stage('behavioral', 'ok')
             except Exception as exc:
-                self._mark_stage('behavioral', 'failed', exc)
-                print(f"[WARN] Behavioral conversion failed for "
-                      f"{self.subject}, {self.experiment}, session {self.session}: {exc}")
+                self._report_stage_failure(
+                    ['behavioral'], 'Behavioral conversion', exc)
                 return
         else:
             self._mark_stage('behavioral', 'skipped')
@@ -261,10 +266,7 @@ class ScalpBIDSConverter:
             self.events = self.load_events()
         except Exception as exc:
             # Both downstream stages depend on the source EEG; fail them together.
-            self._mark_stage('eeg', 'failed', exc)
-            self._mark_stage('montage', 'failed', exc)
-            print(f"[WARN] EEG load failed for "
-                  f"{self.subject}, {self.experiment}, session {self.session}: {exc}")
+            self._report_stage_failure(['eeg', 'montage'], 'EEG load', exc)
             return
 
         # ---------- EEG (direct pyedflib write, no MNE round-trip) ----------
@@ -273,9 +275,7 @@ class ScalpBIDSConverter:
                 self.write_bids_eeg(overwrite=eeg_overwrite)
                 self._mark_stage('eeg', 'ok')
             except Exception as exc:
-                self._mark_stage('eeg', 'failed', exc)
-                print(f"[WARN] EEG conversion failed for "
-                      f"{self.subject}, {self.experiment}, session {self.session}: {exc}")
+                self._report_stage_failure(['eeg'], 'EEG conversion', exc)
         else:
             self._mark_stage('eeg', 'skipped')
 
@@ -285,11 +285,25 @@ class ScalpBIDSConverter:
                 self.write_bids_montage(overwrite=True)
                 self._mark_stage('montage', 'ok')
             except Exception as exc:
-                self._mark_stage('montage', 'failed', exc)
-                print(f"[WARN] Montage write failed for "
-                      f"{self.subject}, {self.experiment}, session {self.session}: {exc}")
+                self._report_stage_failure(['montage'], 'Montage write', exc)
         else:
             self._mark_stage('montage', 'skipped')
+
+    def _report_stage_failure(self, stages, label, exc):
+        """Mark ``stages`` failed and surface ``exc``.
+
+        By default a stage failure is fatal: the exception is re-raised so the
+        run aborts loudly. When the converter was created with ``force=True``
+        the failure is downgraded to a ``[WARN]`` line and the run continues
+        (the legacy best-effort behavior).
+        """
+        for stage in stages:
+            self._mark_stage(stage, 'failed', exc)
+        msg = (f"{label} failed for {self.subject}, {self.experiment}, "
+               f"session {self.session}: {exc}")
+        if not self.force:
+            raise RuntimeError(msg) from exc
+        print(f"[WARN] {msg}")
 
     # ------------------------------------------------------------------
     # Stage gating helpers (mirror intracranial converter pattern)
@@ -924,7 +938,11 @@ class ScalpBIDSConverter:
         channels_path = bids_path.copy().update(
             suffix="channels", extension=".tsv",
         )
-        _channels_tsv(raw_for_tsv, channels_path.fpath,
-                      convert_fmt=None, overwrite=overwrite)
+        # mne-bids dropped the ``convert_fmt`` kwarg from ``_channels_tsv`` in
+        # newer releases; pass it only when the installed version accepts it.
+        channels_kwargs = {"overwrite": overwrite}
+        if "convert_fmt" in inspect.signature(_channels_tsv).parameters:
+            channels_kwargs["convert_fmt"] = None
+        _channels_tsv(raw_for_tsv, channels_path.fpath, **channels_kwargs)
         _write_dig_bids(bids_path, raw_for_tsv,
                         montage=self.montage, overwrite=overwrite)

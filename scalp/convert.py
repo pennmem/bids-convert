@@ -20,7 +20,8 @@ def convert_to_bids(subject, experiment, session):
 def convert_to_bids(subject, experiment, session,
                     root="/data8/PEERS_BIDS/",
                     overwrite_eeg=True,
-                    overwrite_beh=True):
+                    overwrite_beh=True,
+                    force=False):
     """
     Wrapper around ScalpBIDSConverter for a single session.
     """
@@ -31,6 +32,7 @@ def convert_to_bids(subject, experiment, session,
         root=root,
         overwrite_eeg=overwrite_eeg,
         overwrite_beh=overwrite_beh,
+        force=force,
     )
     return True
 
@@ -70,6 +72,12 @@ def parse_args(argv=None):
         action="store_true",
         help="Do not overwrite existing behavioral BIDS files."
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Downgrade per-stage conversion failures to warnings and "
+             "continue. By default any stage failure is a hard error."
+    )
 
     return parser.parse_args(argv)
 
@@ -84,4 +92,5 @@ if __name__ == "__main__":
         root=args.root,
         overwrite_eeg=not args.no_overwrite_eeg,
         overwrite_beh=not args.no_overwrite_beh,
+        force=args.force,
     )

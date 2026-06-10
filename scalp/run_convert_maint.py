@@ -81,7 +81,7 @@ def bids_session_outputs_exist(root, subject, experiment, session):
 
 
 def convert_to_bids(subject, experiment, session, root, overwrite_eeg, overwrite_beh,
-                    skip_if_exists, overrides=None):
+                    skip_if_exists, overrides=None, force=False):
     """
     Worker function. Returns a result dict with job outcome so the caller can
     update the per-task conversion error CSV. If skip_if_exists is True and
@@ -102,12 +102,12 @@ def convert_to_bids(subject, experiment, session, root, overwrite_eeg, overwrite
     with tee_to_file(log_path, mode="w"):
         return _convert_to_bids_inner(
             subject, experiment, session, root,
-            overwrite_eeg, overwrite_beh, skip_if_exists, overrides,
+            overwrite_eeg, overwrite_beh, skip_if_exists, overrides, force,
         )
 
 
 def _convert_to_bids_inner(subject, experiment, session, root, overwrite_eeg,
-                           overwrite_beh, skip_if_exists, overrides):
+                           overwrite_beh, skip_if_exists, overrides, force=False):
     overrides = overrides or {}
     # If any --override-<stage> was passed, never short-circuit at the
     # session level; the converter's per-stage _should_run handles it.
@@ -130,6 +130,7 @@ def _convert_to_bids_inner(subject, experiment, session, root, overwrite_eeg,
         overwrite_eeg=overwrite_eeg,
         overwrite_beh=overwrite_beh,
         overrides=overrides,
+        force=force,
     )
     report = converter.stage_report()
     exc = report['exception']
@@ -227,6 +228,14 @@ def parse_args():
         action="store_true",
         default=False,
         help="Run sequentially (no Dask / Slurm)",
+    )
+
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Downgrade per-stage conversion failures to [WARN] and keep "
+             "going. By default any stage failure is a hard error.",
     )
 
     parser.add_argument(
@@ -417,6 +426,7 @@ if __name__ == "__main__":
                     overwrite_beh=args.overwrite_beh,
                     skip_if_exists=skip_if_exists,
                     overrides=overrides,
+                    force=args.force,
                 )
                 _handle_result(result)
                 msg = result.get('message', '') if isinstance(result, dict) else str(result)
@@ -473,6 +483,7 @@ if __name__ == "__main__":
             overwrite_beh=args.overwrite_beh,
             skip_if_exists=skip_if_exists,
             overrides=overrides,
+            force=args.force,
         )
         future_to_job = dict(zip(futures, job_keys))
 
