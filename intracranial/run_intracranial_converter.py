@@ -20,7 +20,6 @@ from bids_validation import (
     session_tag,
     tee_to_file,
     validate_jobs,
-    write_session_heartbeat_status,
 )
 sys.path.append("/home1/zrentala/bidsreader")
 from bidsreader import CMLBIDSReader
@@ -171,7 +170,6 @@ def convert_one_job(
         error_type = ""
         error_message = ""
         cml = False
-    hb_status = getattr(converter, 'heartbeat_status', None)
     return {
         'subject': str(subject),
         'experiment': experiment,
@@ -184,8 +182,6 @@ def convert_one_job(
         'error_message': error_message,
         'cmlreader_failure': cml,
         'raised': exc is not None,
-        'heartbeat_status': (hb_status or {}).get('status', 'unknown'),
-        'heartbeat_applied': bool((hb_status or {}).get('applied', False)),
     }
 
 
@@ -284,7 +280,7 @@ def run_job(
     if p not in sys.path:
         sys.path.insert(0, p)
     from bids_validation import (
-        session_log_dir, session_tag, tee_to_file, write_session_heartbeat_status,
+        session_log_dir, session_tag, tee_to_file,
     )
     log_dir = session_log_dir(experiment, subject, int(session))
     tag = session_tag(subject, experiment, int(session))
@@ -296,7 +292,6 @@ def run_job(
             root=root,
             overrides=overrides,
         )
-    write_session_heartbeat_status(log_dir, tag, result)
     return result
 
 def _run_convert_with_tee(subject, experiment, session, **kwargs):
@@ -306,7 +301,6 @@ def _run_convert_with_tee(subject, experiment, session, **kwargs):
     log_path = os.path.join(log_dir, f"{tag}_bids_convert_log.txt")
     with tee_to_file(log_path, mode="w"):
         result = convert_one_job(subject, experiment, int(session), **kwargs)
-    write_session_heartbeat_status(log_dir, tag, result)
     return result
 
 

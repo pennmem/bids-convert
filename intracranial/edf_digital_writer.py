@@ -136,6 +136,55 @@ def units_for_container(
     return pmin, pmax, dmin, dmax
 
 
+def encode_egi_to_bdf(
+    data_v: np.ndarray,
+    labels: Sequence[str] | None = None,
+    dim: str = "V",
+    container: str = "BDF",
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict | None]:
+    """EGI float → BDF/EDF integer samples, minimum quantization per channel.
+
+    Returns
+    -------
+    data_int     : (n_channels, n_samples) int32
+    phys_min     : (n_channels,) float  — pmin per channel
+    phys_max     : (n_channels,) float  — pmax per channel
+    signal_units : dict label → (pmin, pmax, dmin, dmax, dim), or None if
+                   labels was not supplied
+    """
+    if container not in _CONTAINER_RANGES:
+        raise ValueError(f"unknown container {container!r}")
+    if labels is not None and len(labels) != data_v.shape[0]:
+        raise ValueError(
+            f"len(labels)={len(labels)} != n_channels={data_v.shape[0]}"
+        )
+
+    dmin, dmax = _CONTAINER_RANGES[container]
+
+    peak = np.max(np.abs(data_v), axis=1)
+    peak = np.where(peak == 0.0, 1e-6, peak)
+
+    gain = peak / float(dmax)                        # V/LSB per channel
+
+    data_int = (
+        np.round(data_v / gain[:, np.newaxis])
+        .clip(dmin, dmax)
+        .astype(np.int32)
+    )
+
+    phys_min = gain * float(dmin)                    # (n_channels,)
+    phys_max = gain * float(dmax)
+
+    signal_units = None
+    if labels is not None:
+        signal_units = {
+            label: (*units_for_container(gain[i], dim, container), dim)
+            for i, label in enumerate(labels)
+        }
+
+    return data_int, phys_min, phys_max, signal_units
+
+
 # ----------------------------------------------------------------------
 # Priority cascade
 # ----------------------------------------------------------------------

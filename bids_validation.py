@@ -590,27 +590,6 @@ def run_intra_validation(
 # Per-session error CSV slice
 # ----------------------------------------------------------------------
 
-def write_session_heartbeat_status(log_dir: str, tag: str, result: dict) -> str:
-    """Persist heartbeat-correction status for one session.
-
-    Writes ``{log_dir}/{tag}_heartbeat_status.txt`` with two lines:
-
-        applied=<bool>
-        status=<str>
-
-    ``status`` is one of: ``"applied"``, ``"failed: <reason>"``, or
-    ``"skipped (system_version=N)"``. ``result`` is the dict returned by
-    ``convert_one_job`` — values default to ``"unknown"`` / ``False`` if
-    the converter didn't record them.
-    """
-    os.makedirs(log_dir, exist_ok=True)
-    path = os.path.join(log_dir, f"{tag}_heartbeat_status.txt")
-    with open(path, "w") as f:
-        f.write(f"applied={bool(result.get('heartbeat_applied', False))}\n")
-        f.write(f"status={result.get('heartbeat_status', 'unknown')}\n")
-    return path
-
-
 def write_session_error_csv(error_log, subject, session, out_dir, tag) -> str:
     """Write a 0- or 1-row CSV at ``{out_dir}/{tag}_bids_conversion_error.csv``.
 
