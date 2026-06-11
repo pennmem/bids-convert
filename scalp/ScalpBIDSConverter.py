@@ -861,7 +861,7 @@ class ScalpBIDSConverter:
 
         data_v = raw.get_data()
         data_int, phys_min, phys_max, signal_units = encode_egi_to_bdf(
-            data_v, labels=labels, dim="V", container="BDF",
+            data_v, labels=labels, dim="uV", container="BDF",
         )
         peak = float(np.max(np.abs(data_v))) or 1e-6
         print(

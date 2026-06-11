@@ -136,6 +136,11 @@ def units_for_container(
     return pmin, pmax, dmin, dmax
 
 
+# SI scale factor implied by a physical_dimension string: physical value in
+# `dim` units = Volts / _DIM_SI_SCALE[dim].
+_DIM_SI_SCALE = {"v": 1.0, "mv": 1e-3, "uv": 1e-6, "µv": 1e-6, "nv": 1e-9}
+
+
 def encode_egi_to_bdf(
     data_v: np.ndarray,
     labels: Sequence[str] | None = None,
@@ -144,11 +149,19 @@ def encode_egi_to_bdf(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict | None]:
     """EGI float → BDF/EDF integer samples, minimum quantization per channel.
 
+    ``dim`` selects the physical_dimension written to the header *and* the unit
+    the per-channel ``physical_min``/``physical_max`` are expressed in. The
+    EDF/BDF header stores those as 8-character ASCII, so a unit that lands the
+    values in a human-scale range (e.g. ``"uV"`` → tens/hundreds) preserves far
+    more significant figures of the reconstruction gain than ``"V"`` does for
+    typical EGI amplitudes (~1e-4 V → ~3-4 sig figs). The integer samples are
+    identical regardless of ``dim`` — only the stored gain precision changes.
+
     Returns
     -------
     data_int     : (n_channels, n_samples) int32
-    phys_min     : (n_channels,) float  — pmin per channel
-    phys_max     : (n_channels,) float  — pmax per channel
+    phys_min     : (n_channels,) float  — pmin per channel (in ``dim`` units)
+    phys_max     : (n_channels,) float  — pmax per channel (in ``dim`` units)
     signal_units : dict label → (pmin, pmax, dmin, dmax, dim), or None if
                    labels was not supplied
     """
@@ -158,16 +171,23 @@ def encode_egi_to_bdf(
         raise ValueError(
             f"len(labels)={len(labels)} != n_channels={data_v.shape[0]}"
         )
+    si_scale = _DIM_SI_SCALE.get(dim.strip().lower())
+    if si_scale is None:
+        raise ValueError(f"unsupported dim {dim!r}; expected one of V/mV/uV/nV")
 
     dmin, dmax = _CONTAINER_RANGES[container]
 
-    peak = np.max(np.abs(data_v), axis=1)
+    # Work in the header's physical unit so quantization and the stored
+    # physical_min/max share that scale.
+    data_phys = data_v / si_scale
+
+    peak = np.max(np.abs(data_phys), axis=1)
     peak = np.where(peak == 0.0, 1e-6, peak)
 
-    gain = peak / float(dmax)                        # V/LSB per channel
+    gain = peak / float(dmax)                        # (dim units)/LSB per channel
 
     data_int = (
-        np.round(data_v / gain[:, np.newaxis])
+        np.round(data_phys / gain[:, np.newaxis])
         .clip(dmin, dmax)
         .astype(np.int32)
     )
