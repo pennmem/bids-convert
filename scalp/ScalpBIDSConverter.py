@@ -29,6 +29,10 @@ class MultiplePathsError(FileExistsError):
     pass
 
 class ScalpBIDSConverter:
+    # EGI output container: "bdf" (per-channel int24, see _write_eeg_from_egi)
+    # or "brainvision" (IEEE float32 .vhdr/.eeg/.vmrk). Change here in code.
+    egi_output_format = "brainvision"
+
     event_column_dict = {
         "ltpFR": ['subject', 'experiment', 'session', 'trial', 'task', 'item_name', 'item_num', 'recog_resp', 'recog_conf', 
                   'resp', 'answer', 'test_x', 'test_y', 'test_z', 'color_r', 'color_g', 'color_b', 'case', 'font'],
@@ -334,7 +338,7 @@ class ScalpBIDSConverter:
             ))
         if stage == 'eeg':
             data_ok = any(os.path.exists(os.path.join(eeg_dir, f'{prefix}_eeg{ext}'))
-                          for ext in ('.edf', '.bdf'))
+                          for ext in ('.edf', '.bdf', '.vhdr'))
             json_ok = os.path.exists(os.path.join(eeg_dir, f'{prefix}_eeg.json'))
             return data_ok and json_ok
         if stage == 'montage':
@@ -782,6 +786,8 @@ class ScalpBIDSConverter:
 
         if self.file_type == ".bdf":
             out_path = self._write_eeg_from_bdf(bids_path)
+        elif self.egi_output_format == "brainvision":
+            out_path = self._write_eeg_from_egi_brainvision(bids_path)
         else:
             out_path = self._write_eeg_from_egi(bids_path)
 
@@ -872,6 +878,34 @@ class ScalpBIDSConverter:
         write_digital(
             str(out_path), labels, data_int, sfreq, signal_units,
             container="BDF",
+        )
+
+        return out_path
+
+    def _write_eeg_from_egi_brainvision(self, bids_path):
+        """EGI .raw / .mff → BrainVision (.vhdr/.eeg/.vmrk), IEEE float32.
+
+        MNE decodes the source to Volts and pybv writes them straight to
+        float32 — no integer requantization and no 8-char EDF/BDF header
+        gain truncation, so the round-trip is at the float32 floor
+        (~1e-7 relative).
+
+        Same channel subset as the BDF path: stim/sync channels are
+        dropped so channels.tsv (also keyed off eeg+eog) stays consistent.
+        """
+        out_path = bids_path.copy().update(
+            suffix="eeg", extension=".vhdr",
+        ).fpath
+        os.makedirs(out_path.parent, exist_ok=True)
+
+        raw = self.raw_file.copy().pick(['eeg', 'eog'])
+        peak = float(np.max(np.abs(raw.get_data()))) or 1e-6
+        print(
+            f"  EGI BrainVision path: peak={peak:.3e} V, float32 "
+            f"({self.subject} {self.experiment} ses-{self.session})"
+        )
+        mne.export.export_raw(
+            str(out_path), raw, fmt="brainvision", overwrite=True,
         )
 
         return out_path
