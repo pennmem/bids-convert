@@ -109,6 +109,42 @@ class ScalpBIDSConverter:
             'trial',
             'valuerecall',
         ],
+         "VCFROP": [
+            'avgvaluecorrect',
+            'avgvalueguess',
+            'eegfile',
+            'eogArtifact',
+            'experiment',
+            'intruded',
+            'intrusion',
+            'item',
+            'itemno',
+            'itemvaluecorrect',
+            'itemvalueguess',
+            'montage',
+            'msoffset',
+            'multiplier',
+            'numingroupchosen',
+            'phase',
+            'playerrotY',
+            'presX',
+            'presZ',
+            'primacybuf',
+            'protocol',
+            'recalled',
+            'rectime',
+            'recencybuf',
+            'serialpos',
+            'session',
+            'store',
+            'storeX',
+            'storeZ',
+            'storepointtype',
+            'subject',
+            'task',
+            'trial',
+            'valuerecall',
+        ],
     }
     # eegoffset,correctPointingDirection, eegfile, eogArtifact, finalrecalled, montage, msoffset, mstime, phase, protocol, submittedPointingDirection, type
     @staticmethod
@@ -643,6 +679,23 @@ class ScalpBIDSConverter:
                 "LongName": "True average tip value",
                 "Description": "True average tip value of items in a delivery day"
             },
+            # ---- VCFROP-specific value fields (correct vs. guessed) ----
+            'itemvaluecorrect': {
+                "LongName": "True item value",
+                "Description": "True (correct) point or monetary value of the item on that trial, against which the subject's guess is scored."
+            },
+            'itemvalueguess': {
+                "LongName": "Guessed item value",
+                "Description": "Subject's guessed point or monetary value for the item on that trial."
+            },
+            'avgvaluecorrect': {
+                "LongName": "True average value",
+                "Description": "True (correct) average tip value of items in a delivery day, against which the subject's average-value guess is scored."
+            },
+            'avgvalueguess': {
+                "LongName": "Guessed average value",
+                "Description": "Subject's guessed average tip value of items in a delivery day."
+            },
             'compensation': {
                 "LongName": "Compensation",
                 "Description": "Compensation to participant at the end of the session."
@@ -736,9 +789,13 @@ class ScalpBIDSConverter:
                 "LongName": "EEG montage name",
                 "Description": "Name or identifier of the electrode montage or sensor net used for the recording (e.g., BioSemi 128, GSN-HydroCel-128).",
             },
+            "experiment": {
+                "LongName": "Experiment name",
+                "Description": "Name of the experiment/task this session belongs to (e.g. 'VCFROP', 'ValueCourier').",
+            },
             "phase": {
-                "LongName": "Phase",
-                "Description": "?",
+                "LongName": "Task phase",
+                "Description": "Phase of the trial during which the event occurred (e.g. encoding/delivery, recall, practice).",
             },
             "protocol": {
                 "LongName": "CML protocol name",
