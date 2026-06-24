@@ -484,7 +484,7 @@ class ScalpBIDSConverter:
             self.wordpool_file = "wordpools/valuecourier_wordpool.txt"
         elif np.isin(self.experiment, ["VCBehOnly"]):
             self.wordpool_file = f"/data/eeg/scalp/ltp/VCBehOnly/{self.subject_raw}/wordpool.txt"
-        elif np.isin(self.experiment, ["VCBehOnly"]):
+        elif np.isin(self.experiment, ["VCFROP"]):
             self.wordpool_file = f"/data/eeg/scalp/ltp/VCFROP/{self.subject_raw}/wordpool.txt"
         else:
             raise Exception("Wordpool not known for this experiment.")
