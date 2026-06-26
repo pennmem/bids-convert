@@ -155,12 +155,73 @@ class intracranial_BIDS_converter:
         return not self._stage_outputs_exist(stage)
     
         
+    def _discover_montages(self, localization):
+        """Montage numbers that have an on-disk localization directory for
+        ``localization``, sorted descending (closest re-montage first)."""
+        loc_dir = f'/protocols/r1/subjects/{self.subject}/localizations/{localization}/montages'
+        found = []
+        for d in glob(os.path.join(loc_dir, '*')):
+            name = os.path.basename(d.rstrip('/'))
+            if os.path.isdir(d) and name.isdigit():
+                found.append(int(name))
+        return sorted(found, reverse=True)
+
+    def _resolve_montage(self, localization, preferred_montage):
+        """Return a montage whose ``contacts`` actually load.
+
+        Tries the index's preferred montage first (authoritative when its
+        localization exists), then every other on-disk montage for this
+        localization (descending), then 0 as a last resort. Validates each
+        candidate by attempting ``load('contacts')``. Returns the chosen
+        montage, or the preferred montage unchanged if none load (so the
+        caller still gets a reader and the downstream stages fail with the
+        usual FileNotFoundError, e.g. when no localization exists at all)."""
+        preferred = int(preferred_montage)
+        candidates = [preferred]
+        for m in self._discover_montages(localization):
+            if m not in candidates:
+                candidates.append(m)
+        if 0 not in candidates:
+            candidates.append(0)
+
+        for m in candidates:
+            try:
+                cml.CMLReader(subject=self.subject, experiment=self.experiment,
+                              session=self.session, localization=localization,
+                              montage=m).load('contacts')
+            except Exception:
+                continue
+            if m != preferred:
+                print(f"WARNING: {self.subject} {self.experiment} ses-{self.session} "
+                      f"index montage={preferred} has no loadable localization; "
+                      f"falling back to montage={m}")
+            return m
+
+        print(f"WARNING: {self.subject} {self.experiment} ses-{self.session} "
+              f"no montage with loadable localization (tried {candidates}); "
+              f"using index montage={preferred} — electrode/bipolar stages will fail")
+        return preferred
+
     # instantiate CMLReader object, save as attribute\
     def cml_reader(self):
         df = cml.get_data_index('r1', '/')
-        sel = df.query("subject==@self.subject & experiment==@self.experiment & session==@self.session").iloc[0]
-        reader = cml.CMLReader(subject=sel.subject, experiment=sel.experiment, session=sel.session, 
-                               localization=sel.localization, montage=sel.montage)
+        matches = df.query("subject==@self.subject & experiment==@self.experiment & session==@self.session")
+        if matches.empty:
+            raise RuntimeError(
+                f"{self.subject}/{self.experiment}/ses-{self.session} not found in r1 data index"
+            )
+        sel = matches.iloc[0]
+
+        # The data index montage can disagree with what is actually localized
+        # on disk (e.g. R1204T RepFR1 is indexed montage=1 but only montage 0
+        # is localized). Resolve to a montage whose contacts/pairs load so the
+        # electrode + bipolar stages are not silently dropped.
+        self.localization = int(sel.localization)
+        self.index_montage = int(sel.montage)
+        self.montage = self._resolve_montage(self.localization, self.index_montage)
+
+        reader = cml.CMLReader(subject=sel.subject, experiment=sel.experiment, session=sel.session,
+                               localization=self.localization, montage=self.montage)
         return reader
     
     # ---------- Events ----------
