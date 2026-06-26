@@ -62,7 +62,7 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
 
         final_cols = ['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name', 'category',
                       'serialpos', 'list', 'test', 'answer', 'experiment', 'session', 'subject']
-        events = events.reindex(columns=final_cols, fill_value='n/a')                                   # fill missing cols (e.g. test/answer when session has no math events)
+        events = events.reindex(columns=self._append_uncorrected_cols(events, final_cols), fill_value='n/a')   # fill missing cols (e.g. test/answer when session has no math events)
         return events
     
     def apply_event_durations(self, events):
@@ -188,6 +188,7 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
             'answer': {"LongName": "Math problem response", 
                        "Description": "Participant answer to problem with form X + Y + Z = ?  Note this is not necessarily the correct answer."}
         }
+        HED.update(self.UNCORRECTED_HED)
         events_descriptor = {k:HED[k] for k in HED if k in self.events.columns}
         return events_descriptor
     

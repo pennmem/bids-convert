@@ -55,9 +55,9 @@ class PAL1_BIDS_converter(intracranial_BIDS_converter):
             if col not in events.columns:
                 events[col] = 'n/a'
 
-        events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file',
+        events = events[self._append_uncorrected_cols(events, ['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file',
                          'serialpos', 'probepos', 'probe_word', 'resp_word', 'study_1', 'study_2',    # leave probepos and serialpos as is
-                         'list', 'test', 'answer', 'experiment', 'session', 'subject']]         # re-order columns
+                         'list', 'test', 'answer', 'experiment', 'session', 'subject'])]         # re-order columns
 
         return events
     
@@ -188,6 +188,7 @@ class PAL1_BIDS_converter(intracranial_BIDS_converter):
             'study_1': {'Description': 'Word presented as part of paired associates.'},
             'study_2': {'Description': 'Word presented as part of paired associates.'}
         }
+        HED.update(self.UNCORRECTED_HED)
         events_descriptor = {k:HED[k] for k in HED if k in self.events.columns}
         return events_descriptor
     

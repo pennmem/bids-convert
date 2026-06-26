@@ -58,9 +58,9 @@ class catFR2_BIDS_converter(intracranial_BIDS_converter):
         events = events.replace('', 'n/a')
 
         # select and re-order columns
-        events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name', 'category',
+        events = events[self._append_uncorrected_cols(events, ['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name', 'category',
                          'serialpos', 'recalled', 'list', 'test', 'answer', 'stimulation', 'stim_list', 'stim_duration', 'anode_label', 'cathode_label',
-                         'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width', 'experiment', 'session', 'subject']]
+                         'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width', 'experiment', 'session', 'subject'])]
         
         return events
     
@@ -175,6 +175,7 @@ class catFR2_BIDS_converter(intracranial_BIDS_converter):
             "subject": {"LongName": "Subject ID",
                         "Description": "The string identifier of the subject, e.g. R1001P."},
         }
+        HED.update(self.UNCORRECTED_HED)
         events_descriptor = {k:HED[k] for k in HED if k in self.events.columns}
         return events_descriptor
     

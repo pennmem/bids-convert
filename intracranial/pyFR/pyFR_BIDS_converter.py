@@ -99,13 +99,13 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
             events['subject'] = self.subject   # remove _montage from subject
 
         if self.math_events:
-            events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time',
+            events = events[self._append_uncorrected_cols(events, ['onset', 'duration', 'sample', 'trial_type', 'response_time',
                             'stim_file', 'item_name', 'serialpos', 'list', 'test', 'answer',
-                            'experiment', 'session', 'subject']]                                        # re-order columns + drop unneeded fields
+                            'experiment', 'session', 'subject'])]                                        # re-order columns + drop unneeded fields
         else:
-            events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time',
+            events = events[self._append_uncorrected_cols(events, ['onset', 'duration', 'sample', 'trial_type', 'response_time',
                              'stim_file', 'item_name', 'serialpos', 'list',
-                             'experiment', 'session', 'subject']]
+                             'experiment', 'session', 'subject'])]
         return events
 
     def apply_event_durations(self, events):
@@ -184,6 +184,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
             'answer': {"LongName": "Math problem response",
                        "Description": "Participant answer to problem with form X + Y + Z = ?  Note this is not necessarily the correct answer."}
         }
+        HED.update(self.UNCORRECTED_HED)
         events_descriptor = {k:HED[k] for k in HED if k in self.events.columns}
         return events_descriptor
 

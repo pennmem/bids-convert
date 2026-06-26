@@ -32,7 +32,7 @@ class PS21_BIDS_converter(intracranial_BIDS_converter):
         base_cols = ['onset', 'duration', 'sample', 'trial_type', 'mstime', 'msoffset',
                      'subject', 'experiment', 'session', 'is_stim', 'eegfile', 'exp_version',
                      'montage', 'protocol', 'ad_observed', 'stim_params']
-        events = events[[c for c in base_cols if c in events.columns] + stim_cols]
+        events = events[self._append_uncorrected_cols(events, [c for c in base_cols if c in events.columns] + stim_cols)]
 
         return events
 
@@ -105,6 +105,7 @@ class PS21_BIDS_converter(intracranial_BIDS_converter):
             "stim_duration": {"Description": "Duration of stimulation in ms."},
             "stimulation": {"Description": "Indicator of whether stimulation was delivered during this event."},
         }
+        HED.update(self.UNCORRECTED_HED)
         events_descriptor = {k: HED[k] for k in HED if k in self.events.columns}
         return events_descriptor
 

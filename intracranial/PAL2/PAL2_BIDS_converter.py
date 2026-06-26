@@ -56,10 +56,10 @@ class PAL2_BIDS_converter(intracranial_BIDS_converter):
         events = events.replace('', 'n/a')             # no empty cells
 
         # select and re-order columns
-        events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'study_1', 'study_2',
+        events = events[self._append_uncorrected_cols(events, ['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'study_1', 'study_2',
                          'serialpos', 'probepos', 'probe_word', 'resp_word', 'correct', 'list', 'test', 'answer', 'stimulation', 'stim_list',
-                         'stim_duration', 'anode_label', 'cathode_label', 'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width', 
-                         'experiment', 'session', 'subject']]
+                         'stim_duration', 'anode_label', 'cathode_label', 'amplitude', 'pulse_freq', 'n_pulses', 'pulse_width',
+                         'experiment', 'session', 'subject'])]
         
         return events
     
@@ -176,6 +176,7 @@ class PAL2_BIDS_converter(intracranial_BIDS_converter):
             "subject": {"LongName": "Subject ID",
                         "Description": "The string identifier of the subject, e.g. R1001P."},
         }
+        HED.update(self.UNCORRECTED_HED)
         events_descriptor = {k:HED[k] for k in HED if k in self.events.columns}
         return events_descriptor
     

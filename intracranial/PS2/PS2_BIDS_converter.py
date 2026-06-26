@@ -79,6 +79,7 @@ class PS2_BIDS_converter(PS21_BIDS_converter):
             "stim_duration": {"Description": "Duration of stimulation in ms. For STIM_SINGLE_PULSE events this is 1 ms."},
             "stimulation": {"Description": "Indicator of whether stimulation was delivered during this event."},
         }
+        HED.update(self.UNCORRECTED_HED)
         events_descriptor = {k: HED[k] for k in HED if k in self.events.columns}
         return events_descriptor
 

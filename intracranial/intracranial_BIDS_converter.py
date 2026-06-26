@@ -174,10 +174,29 @@ class intracranial_BIDS_converter:
 
     def events_to_BIDS(self):
         raise NotImplementedError       # override in subclass
-    
+
     def make_events_descriptor(self):
         raise NotImplementedError       # override in subclass
-    
+
+    # Raw (pre clock-correction) event-time columns emitted by the System-4 aligner
+    # (System4AlignerCorrection). Absent on System 1/2/3 sessions and on older
+    # System-4 events aligned before the correction aligner existed, so subclasses
+    # include them only when present (see _append_uncorrected_cols), leaving all
+    # other output unchanged.
+    UNCORRECTED_EVENT_COLS = ['eegoffset_uncorrected', 'mstime_uncorrected']
+
+    UNCORRECTED_HED = {
+        "eegoffset_uncorrected": {"Description": "EEG sample index of the event before the "
+            "System-4 task->host clock correction (raw EEGSTART-anchored offset). System-4 only."},
+        "mstime_uncorrected": {"Description": "Event time in unix-epoch milliseconds before the "
+            "System-4 clock correction. System-4 only."},
+    }
+
+    def _append_uncorrected_cols(self, events, cols):
+        """Append the raw System-4 *_uncorrected time columns to a selected column
+        list, but only when the loaded events actually carry them."""
+        return list(cols) + [c for c in self.UNCORRECTED_EVENT_COLS if c in events.columns]
+
     def write_BIDS_beh(self):
         bids_path = self._BIDS_path().update(suffix='beh', extension='.tsv', datatype='beh')
         os.makedirs(bids_path.directory, exist_ok=True)

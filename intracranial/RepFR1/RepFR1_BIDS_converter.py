@@ -46,8 +46,8 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
         events = events.fillna('n/a')
         events = events.replace('', 'n/a')
         
-        events = events[['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name',
-                         'serialpos', 'repeats', 'recalled', 'list', 'experiment', 'session', 'subject']]        # select and re-order columns
+        events = events[self._append_uncorrected_cols(events, ['onset', 'duration', 'sample', 'trial_type', 'response_time', 'stim_file', 'item_name',
+                         'serialpos', 'repeats', 'recalled', 'list', 'experiment', 'session', 'subject'])]        # select and re-order columns
 
         return events
         
@@ -131,6 +131,7 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
             "repeats": {"Description": "Number of repetitions within the list of a word presented in a WORD event."},
             "recalled": {"Description": "For WORD events, denotes if presented word is recalled.  For REC_WORD events, denotes if recall is correct."}
         }
+        HED.update(self.UNCORRECTED_HED)
         events_descriptor = {k:HED[k] for k in HED if k in self.events.columns}
         return events_descriptor
     
