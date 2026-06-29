@@ -20,20 +20,36 @@ _PYFR_DEFAULT_DATAFORMAT = "int16"
 
 
 def _patch_cmlreaders_params_reader():
-    """Make cmlreaders tolerant of incomplete pyFR ``params.txt`` files.
+    """Make cmlreaders tolerant of old pyFR split-EEG quirks.
 
-    Many old pyFR subjects were staged with a params.txt that contains only
-    ``samplerate <rate>`` (and a few wrote ``samplerate=<rate>``), so
-    ``EEGMetaReader._read_params_txt`` raised ``KeyError: 'dataformat'`` (or
-    ``'samplerate'``) and the whole EEG load failed. We replace that method
-    with a line-based parser that accepts both ``key value`` and ``key=value``
-    and defaults a missing ``dataformat`` to int16. ``gain`` is intentionally
-    ignored — cmlreaders never uses it; physical-µV scaling is carried by
-    ``conversion_to_V`` in system_1_unit_conversions.csv. Only the params.txt
-    path is affected (pyFR-type data); r1/ltp experiments read sources.json.
-    Idempotent: safe to call more than once.
+    Two staging issues in old pyFR subjects break cmlreaders' raw EEG load:
+
+    1. Incomplete ``params.txt``: many subjects have only ``samplerate <rate>``
+       (a few wrote ``samplerate=<rate>``), so ``EEGMetaReader._read_params_txt``
+       raised ``KeyError: 'dataformat'`` / ``'samplerate'``. We replace it with a
+       line-based parser that accepts both ``key value`` and ``key=value`` and
+       defaults a missing ``dataformat`` to int16. ``gain`` is intentionally
+       ignored — cmlreaders never uses it; physical-µV scaling is carried by
+       ``conversion_to_V`` in system_1_unit_conversions.csv.
+
+    2. Auxiliary files in eeg.noreref: ``SplitEEGReader.read`` globs
+       ``<basename>.*`` and does ``int(ext)`` on every match, so a stray
+       ``.sync`` or ``.params.txt`` file raised ``ValueError: invalid literal
+       for int() ... 'sync'`` / ``'txt'``. We filter the glob to files whose
+       extension is a numeric channel index.
+
+    3. Matlab event files with no ``session`` column: cmlreaders'
+       ``EventReader._read_matlab_events`` does ``df[df["session"] == ...]`` and
+       raised ``KeyError: 'session'`` for old single-session subjects (FZ*,
+       FR091). We add the column (= the requested session) before filtering, for
+       both the main and math event frames.
+
+    Only the params.txt / split-EEG / matlab-events paths are affected
+    (pyFR-type data); r1/ltp experiments read sources.json and HDF5. Idempotent.
     """
-    from cmlreaders.readers.eeg import EEGMetaReader
+    from cmlreaders.readers.eeg import EEGMetaReader, SplitEEGReader
+    from cmlreaders.readers.readers import EventReader
+    from pathlib import Path as _Path
     if getattr(EEGMetaReader, "_pyfr_params_patched", False):
         return
 
@@ -56,7 +72,45 @@ def _patch_cmlreaders_params_reader():
             "path": self.file_path,
         }
 
+    def _get_files(self, glob_pattern):
+        files = sorted(_Path(self.filename).parent.glob(glob_pattern + ".*"))
+        # Keep only per-channel data files (numeric extension); drop auxiliary
+        # files like .sync and .params.txt that otherwise break int(ext).
+        return [f for f in files if f.name.split(".")[-1].isdigit()]
+
+    def _read_matlab_events(self):
+        import scipy.io as sio
+        df = pd.DataFrame(sio.loadmat(self.file_path, squeeze_me=True)["events"])
+        # Old single-session event files may lack a `session` column; every row
+        # belongs to this session, so add it before the filter below.
+        if "session" not in df.columns:
+            df["session"] = self.session
+        if self.session is not None:
+            df = df[df["session"] == self.session]
+        if "experiment" not in df:
+            df.loc[:, "experiment"] = self.experiment
+        if self.experiment == 'pyFR':
+            math_toggle = False
+            if self.montage != 0:
+                fpath = f'/data/events/pyFR/{self.subject}_{self.montage}_math.mat'
+            else:
+                fpath = f'/data/events/pyFR/{self.subject}_math.mat'
+            if os.path.exists(fpath):
+                math_toggle = True
+                math_df = pd.DataFrame(sio.loadmat(fpath, squeeze_me=True)['events'])
+            if math_toggle:
+                if "session" not in math_df.columns:
+                    math_df["session"] = self.session
+                math_df = math_df[math_df['session'] == self.session]
+                math_df = math_df[(math_df['type'] != 'B') & (math_df['type'] != 'E')]
+                math_df['list'] = math_df['list'] - 1    # math events given list + 1
+                df = pd.concat([math_df, df], ignore_index=True)
+                df = df.sort_values(by='mstime', ascending=True, ignore_index=True)
+        return df
+
     EEGMetaReader._read_params_txt = _read_params_txt
+    SplitEEGReader._get_files = _get_files
+    EventReader._read_matlab_events = _read_matlab_events
     EEGMetaReader._pyfr_params_patched = True
 
 
