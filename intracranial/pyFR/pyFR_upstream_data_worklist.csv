@@ -1,78 +1,52 @@
-subject,session,category,error_type,error_message
-CH008b,1,A_missing_params_or_sources,FileNotFoundError,Unable to find the requested file in any of the expected locations:  /protocols/pyfr/subjects/CH008b/experiments/pyFR/sessions/1/ephys/current_processed/sources.json /data/eeg/CH008b/eeg.noreref/CH008_22Apr02_1816_1.params.txt /data/eeg/CH008b/eeg.noreref/params.txt
-CH008b,2,A_missing_params_or_sources,FileNotFoundError,Unable to find the requested file in any of the expected locations:  /protocols/pyfr/subjects/CH008b/experiments/pyFR/sessions/2/ephys/current_processed/sources.json /data/eeg/CH008b/eeg.noreref/CH008_24Apr02_1138_1.params.txt /data/eeg/CH008b/eeg.noreref/params.txt
-CH008b,3,A_missing_params_or_sources,FileNotFoundError,Unable to find the requested file in any of the expected locations:  /protocols/pyfr/subjects/CH008b/experiments/pyFR/sessions/3/ephys/current_processed/sources.json /data/eeg/CH008b/eeg.noreref/CH008_24Apr02_1719_1.params.txt /data/eeg/CH008b/eeg.noreref/params.txt
-CP001,1,A_missing_params_or_sources,FileNotFoundError,Unable to find the requested file in any of the expected locations:  /protocols/pyfr/subjects/CP001/experiments/pyFR/sessions/1/ephys/current_processed/sources.json /data/eeg/CP001/eeg.noreref/CP001_01Nov05_1705.params.txt /data/eeg/CP001/eeg.noreref/params.txt
-CP001,2,A_missing_params_or_sources,FileNotFoundError,Unable to find the requested file in any of the expected locations:  /protocols/pyfr/subjects/CP001/experiments/pyFR/sessions/2/ephys/current_processed/sources.json /data/eeg/CP001/eeg.noreref/CP001_02Nov05_1410.params.txt /data/eeg/CP001/eeg.noreref/params.txt
-CP001,3,A_missing_params_or_sources,FileNotFoundError,Unable to find the requested file in any of the expected locations:  /protocols/pyfr/subjects/CP001/experiments/pyFR/sessions/3/ephys/current_processed/sources.json /data/eeg/CP001/eeg.noreref/CP001_04Nov05_1550.params.txt /data/eeg/CP001/eeg.noreref/params.txt
-CP001,4,A_missing_params_or_sources,FileNotFoundError,Unable to find the requested file in any of the expected locations:  /protocols/pyfr/subjects/CP001/experiments/pyFR/sessions/4/ephys/current_processed/sources.json /data/eeg/CP001/eeg.noreref/CP001_06Nov05_1420.params.txt /data/eeg/CP001/eeg.noreref/params.txt
-TJ006,0,A_missing_params_or_sources,FileNotFoundError,Unable to find the requested file in any of the expected locations:  /protocols/pyfr/subjects/TJ006/experiments/pyFR/sessions/0/ephys/current_processed/sources.json /data/eeg/TJ006/eeg.noreref/TJ006_17Aug09_1320.params.txt /data/eeg/TJ006/eeg.noreref/params.txt
-TJ017,0,A_missing_params_or_sources,FileNotFoundError,Unable to find the requested file in any of the expected locations:  /protocols/pyfr/subjects/TJ017/experiments/pyFR/sessions/0/ephys/current_processed/sources.json /data/eeg/TJ017/eeg.noreref/TJ017_09Sep10_1404.params.txt /data/eeg/TJ017/eeg.noreref/params.txt
-TJ019,1,A_missing_params_or_sources,FileNotFoundError,Unable to find the requested file in any of the expected locations:  /protocols/pyfr/subjects/TJ019/experiments/pyFR/sessions/1/ephys/current_processed/sources.json /data/eeg/TJ019/eeg.noreref/TJ019_22Sep10_1301.params.txt /data/eeg/TJ019/eeg.noreref/params.txt
-BW001,1,B_missing_dataformat,KeyError,'dataformat'
-BW013,1,B_missing_dataformat,KeyError,'dataformat'
-BW014,1,B_missing_dataformat,KeyError,'dataformat'
-BW014,2,B_missing_dataformat,KeyError,'dataformat'
-BW014,3,B_missing_dataformat,KeyError,'dataformat'
-CH003,1,B_missing_dataformat,KeyError,'dataformat'
-CH005,1,B_missing_dataformat,KeyError,'dataformat'
-CH012,1,B_missing_dataformat,KeyError,'dataformat'
-CH012,2,B_missing_dataformat,KeyError,'dataformat'
-CH012,3,B_missing_dataformat,KeyError,'dataformat'
-CH013,1,B_missing_dataformat,KeyError,'dataformat'
-CH018,1,B_missing_dataformat,KeyError,'dataformat'
-CH018,2,B_missing_dataformat,KeyError,'dataformat'
-CH040,1,B_missing_dataformat,KeyError,'dataformat'
-CH042,1,B_missing_dataformat,KeyError,'dataformat'
-CH042,2,B_missing_dataformat,KeyError,'dataformat'
-CH046,1,B_missing_dataformat,KeyError,'dataformat'
-CH048,1,B_missing_dataformat,KeyError,'dataformat'
-CH048,2,B_missing_dataformat,KeyError,'dataformat'
-CH048,3,B_missing_dataformat,KeyError,'dataformat'
-CH048,4,B_missing_dataformat,KeyError,'dataformat'
-CH058,1,B_missing_dataformat,KeyError,'dataformat'
-CH058,2,B_missing_dataformat,KeyError,'dataformat'
-CH061,1,B_missing_dataformat,KeyError,'dataformat'
-CH061,2,B_missing_dataformat,KeyError,'dataformat'
-CH061,3,B_missing_dataformat,KeyError,'dataformat'
-CH063,1,B_missing_dataformat,KeyError,'dataformat'
-CH063,2,B_missing_dataformat,KeyError,'dataformat'
-CH065,1,B_missing_dataformat,KeyError,'dataformat'
-CH065,2,B_missing_dataformat,KeyError,'dataformat'
-CH066,1,B_missing_dataformat,KeyError,'dataformat'
-CH067,1,B_missing_dataformat,KeyError,'dataformat'
-CH067,2,B_missing_dataformat,KeyError,'dataformat'
-CH068,1,B_missing_dataformat,KeyError,'dataformat'
-CH068,2,B_missing_dataformat,KeyError,'dataformat'
-CH068,3,B_missing_dataformat,KeyError,'dataformat'
-CH068,4,B_missing_dataformat,KeyError,'dataformat'
-FR025,1,B_missing_dataformat,KeyError,'dataformat'
-FR029,1,B_missing_dataformat,KeyError,'dataformat'
-FR032,1,B_missing_dataformat,KeyError,'dataformat'
-FR037,1,B_missing_dataformat,KeyError,'dataformat'
-FR038,1,B_missing_dataformat,KeyError,'dataformat'
-FR050,1,B_missing_dataformat,KeyError,'dataformat'
-FR060,1,B_missing_dataformat,KeyError,'dataformat'
-FR080,1,B_missing_dataformat,KeyError,'dataformat'
-FR110,1,B_missing_dataformat,KeyError,'dataformat'
-FR120,1,B_missing_dataformat,KeyError,'dataformat'
-FR130,1,B_missing_dataformat,KeyError,'dataformat'
-FR070,1,B_missing_samplerate,KeyError,'samplerate'
-FR090,1,B_missing_samplerate,KeyError,'samplerate'
-FR090,2,B_missing_samplerate,KeyError,'samplerate'
-FR091,0,C_missing_session_col,KeyError,'session'
-FZ001,0,C_missing_session_col,KeyError,'session'
-FZ002,0,C_missing_session_col,KeyError,'session'
-FZ003,0,C_missing_session_col,KeyError,'session'
-FZ004,0,C_missing_session_col,KeyError,'session'
-FZ005,0,C_missing_session_col,KeyError,'session'
-FZ006,0,C_missing_session_col,KeyError,'session'
-FZ007,0,C_missing_session_col,KeyError,'session'
-FZ008,0,C_missing_session_col,KeyError,'session'
-FZ009,0,C_missing_session_col,KeyError,'session'
-FR170,1,D_eegoffset_missing,KeyError,"""['eegoffset'] not in index"""
-UP007,1,D_malformed_value,ValueError,invalid literal for int() with base 10: 'txt'
-UP007,2,D_malformed_value,ValueError,invalid literal for int() with base 10: 'txt'
-UP008,0,D_malformed_value,ValueError,invalid literal for int() with base 10: 'txt'
-TJ033,0,D_split_eeg_mismatch,ValueError,split EEG filenames don't seem to match what are in the events
-TJ033,1,D_split_eeg_mismatch,ValueError,split EEG filenames don't seem to match what are in the events
+subject,sessions,orig_category,resolution,detail,action
+CH008b,3,A_missing_params_or_sources,eeg_absent,—,behavioral_only: no /data/eeg/<subj>
+CP001,4,A_missing_params_or_sources,eeg_absent,—,"behavioral_only: no eeg.noreref (only docs,images)"
+FR170,1,D_eegoffset_missing,eeg_absent,—,"behavioral_only: no eeg.noreref (only behavioral,docs,eeg.reref.all,raw,tal)"
+TJ006,1,A_missing_params_or_sources,eeg_absent,—,behavioral_only: no /data/eeg/<subj>
+TJ017,1,A_missing_params_or_sources,eeg_absent,—,behavioral_only: no /data/eeg/<subj>
+TJ019,1,A_missing_params_or_sources,eeg_absent,—,behavioral_only: no /data/eeg/<subj>
+FR025,1,B_missing_dataformat,noreref_split_missing,"sr=sp,fmt=False",regenerate eeg.noreref split files from raw/reref (data present elsewhere)
+FR029,1,B_missing_dataformat,noreref_split_missing,"sr=sp,fmt=False",regenerate eeg.noreref split files from raw/reref (data present elsewhere)
+FR091,1,C_missing_session_col,noreref_split_missing,"sr=eq,fmt=False",regenerate eeg.noreref split files from raw/reref (data present elsewhere)
+FZ001,1,C_missing_session_col,noreref_split_missing,"sr=sp,fmt=False",regenerate eeg.noreref split files from raw/reref (data present elsewhere)
+FZ002,1,C_missing_session_col,noreref_split_missing,"sr=sp,fmt=False",regenerate eeg.noreref split files from raw/reref (data present elsewhere)
+FZ003,1,C_missing_session_col,noreref_split_missing,"sr=sp,fmt=False",regenerate eeg.noreref split files from raw/reref (data present elsewhere)
+FZ004,1,C_missing_session_col,noreref_split_missing,"sr=sp,fmt=False",regenerate eeg.noreref split files from raw/reref (data present elsewhere)
+FZ005,1,C_missing_session_col,noreref_split_missing,"sr=sp,fmt=False",regenerate eeg.noreref split files from raw/reref (data present elsewhere)
+FZ006,1,C_missing_session_col,noreref_split_missing,"sr=sp,fmt=False",regenerate eeg.noreref split files from raw/reref (data present elsewhere)
+FZ007,1,C_missing_session_col,noreref_split_missing,"sr=sp,fmt=False",regenerate eeg.noreref split files from raw/reref (data present elsewhere)
+FZ008,1,C_missing_session_col,noreref_split_missing,"sr=sp,fmt=False",regenerate eeg.noreref split files from raw/reref (data present elsewhere)
+FZ009,1,C_missing_session_col,noreref_split_missing,"sr=sp,fmt=False",regenerate eeg.noreref split files from raw/reref (data present elsewhere)
+BW001,1,B_missing_dataformat,params_fixable,256 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+BW013,1,B_missing_dataformat,params_fixable,250 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+BW014,3,B_missing_dataformat,params_fixable,190 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH003,1,B_missing_dataformat,params_fixable,597 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH005,1,B_missing_dataformat,params_fixable,512 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH012,3,B_missing_dataformat,params_fixable,1263 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH013,1,B_missing_dataformat,params_fixable,896 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH018,2,B_missing_dataformat,params_fixable,512 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH040,1,B_missing_dataformat,params_fixable,80 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH042,2,B_missing_dataformat,params_fixable,672 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH046,1,B_missing_dataformat,params_fixable,768 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH048,4,B_missing_dataformat,params_fixable,384 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH058,2,B_missing_dataformat,params_fixable,512 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH061,3,B_missing_dataformat,params_fixable,288 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH063,2,B_missing_dataformat,params_fixable,166 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH065,2,B_missing_dataformat,params_fixable,256 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH066,1,B_missing_dataformat,params_fixable,176 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH067,2,B_missing_dataformat,params_fixable,288 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+CH068,4,B_missing_dataformat,params_fixable,365 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+FR032,1,B_missing_dataformat,params_fixable,168 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+FR037,1,B_missing_dataformat,params_fixable,88 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+FR038,1,B_missing_dataformat,params_fixable,146 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+FR050,1,B_missing_dataformat,params_fixable,126 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+FR060,1,B_missing_dataformat,params_fixable,172 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+FR070,1,B_missing_samplerate,params_fixable,763 split files,"EDIT params.txt: samplerate= -> 'samplerate ' + add ""dataformat 'int16'"""
+FR080,1,B_missing_dataformat,params_fixable,420 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+FR090,2,B_missing_samplerate,params_fixable,288 split files,"EDIT params.txt: samplerate= -> 'samplerate ' + add ""dataformat 'int16'"""
+FR110,1,B_missing_dataformat,params_fixable,255 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+FR120,1,B_missing_dataformat,params_fixable,174 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+FR130,1,B_missing_dataformat,params_fixable,174 split files,"EDIT params.txt: add ""dataformat 'int16'"""
+TJ033,2,D_split_eeg_mismatch,params_ok?,,params look complete - investigate separately
+UP007,2,D_malformed_value,params_ok?,,params look complete - investigate separately
+UP008,1,D_malformed_value,params_ok?,,params look complete - investigate separately

@@ -12,6 +12,56 @@ from ..intracranial_BIDS_converter import intracranial_BIDS_converter
 
 _HERE = Path(__file__).parent
 
+# Default raw EEG sample format for pyFR split-channel recordings whose
+# params.txt omits the `dataformat` line. Verified int16: reading the raw
+# eeg.noreref/*.NNN files as int16 yields clean EEG ranges, whereas float32
+# yields denormal garbage; intact same-era subjects all declare 'int16'.
+_PYFR_DEFAULT_DATAFORMAT = "int16"
+
+
+def _patch_cmlreaders_params_reader():
+    """Make cmlreaders tolerant of incomplete pyFR ``params.txt`` files.
+
+    Many old pyFR subjects were staged with a params.txt that contains only
+    ``samplerate <rate>`` (and a few wrote ``samplerate=<rate>``), so
+    ``EEGMetaReader._read_params_txt`` raised ``KeyError: 'dataformat'`` (or
+    ``'samplerate'``) and the whole EEG load failed. We replace that method
+    with a line-based parser that accepts both ``key value`` and ``key=value``
+    and defaults a missing ``dataformat`` to int16. ``gain`` is intentionally
+    ignored — cmlreaders never uses it; physical-µV scaling is carried by
+    ``conversion_to_V`` in system_1_unit_conversions.csv. Only the params.txt
+    path is affected (pyFR-type data); r1/ltp experiments read sources.json.
+    Idempotent: safe to call more than once.
+    """
+    from cmlreaders.readers.eeg import EEGMetaReader
+    if getattr(EEGMetaReader, "_pyfr_params_patched", False):
+        return
+
+    def _read_params_txt(self):
+        params = {}
+        with open(self.file_path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                m = re.match(r"(\w+)\s*[=\s]\s*(.+)", line)
+                if m:
+                    params[m.group(1)] = m.group(2).strip()
+        if "samplerate" not in params:
+            raise KeyError("samplerate")        # genuinely unusable; keep failing loudly
+        return {
+            "sample_rate": float(params["samplerate"]),
+            "data_format": params.get("dataformat", _PYFR_DEFAULT_DATAFORMAT).replace("'", ""),
+            "n_samples": None,
+            "path": self.file_path,
+        }
+
+    EEGMetaReader._read_params_txt = _read_params_txt
+    EEGMetaReader._pyfr_params_patched = True
+
+
+_patch_cmlreaders_params_reader()
+
 class pyFR_BIDS_converter(intracranial_BIDS_converter):
     wordpool_EN = np.loadtxt(_HERE / 'wordpools' / 'wordpool_EN.txt', dtype=str)
     CH_TYPES = {'TJ027': 'ECOG', 'TJ029': 'SEEG', 'TJ030': 'SEEG', 'TJ032': 'ECOG', 'TJ061': 'ECOG', 'TJ083':'ECOG',
