@@ -87,8 +87,18 @@ def _patch_cmlreaders_params_reader():
             df["session"] = self.session
         if self.session is not None:
             df = df[df["session"] == self.session]
-        if "experiment" not in df:
-            df.loc[:, "experiment"] = self.experiment
+        # Some System-1 events store `eegfile` as a numpy array per row, which
+        # breaks cmlreaders' to_absolute (`row["eegfile"].startswith("/")`).
+        # Coerce to a scalar string.
+        if "eegfile" in df.columns:
+            df["eegfile"] = df["eegfile"].map(
+                lambda v: (v.item() if getattr(v, "size", None) == 1
+                           else ("" if getattr(v, "size", None) == 0 else str(v[0])))
+                if isinstance(v, np.ndarray) else v)
+        # `df.loc[:, col] = scalar` raises on an empty (no-index) frame; plain
+        # assignment is safe whether or not the frame has rows.
+        if "experiment" not in df.columns:
+            df["experiment"] = self.experiment
         if self.experiment == 'pyFR':
             math_toggle = False
             if self.montage != 0:
@@ -376,15 +386,19 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
             electrodes['y'] = self.contacts['y'].astype(float)
             electrodes['z'] = self.contacts['z'].astype(float)
         elif cml_space == 'mni':
+            # Map MNI coords to each contact by contact number, filling NaN for
+            # contacts absent from the coords file. (Aligning by position fails
+            # when the coords file has fewer contacts than the contacts table —
+            # e.g. CH066: 150 coords vs 156 contacts.)
             mni_coords = self._load_mni_coords()
-            contacts_mask = [
-                i for i, c in enumerate(mni_coords[:, 0])
-                if int(c) in np.array(self.contacts.contact)
-            ]
-            mni_contacts = mni_coords[contacts_mask, :]
-            electrodes['x'] = mni_contacts[:, 1]
-            electrodes['y'] = mni_contacts[:, 2]
-            electrodes['z'] = mni_contacts[:, 3]
+            coord_map = {int(row[0]): row[1:4] for row in mni_coords}
+            xyz = np.array([
+                coord_map.get(int(c), (np.nan, np.nan, np.nan))
+                for c in np.array(self.contacts.contact)
+            ], dtype=float)
+            electrodes['x'] = xyz[:, 0]
+            electrodes['y'] = xyz[:, 1]
+            electrodes['z'] = xyz[:, 2]
         else:
             electrodes['x'] = np.nan
             electrodes['y'] = np.nan
