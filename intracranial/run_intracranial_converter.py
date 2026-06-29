@@ -546,6 +546,14 @@ examples:
         log_directory=log_dir,
     )
 
+    # Ship conversion_error_log.py to every worker so pickled ConversionErrorLog
+    # objects can be deserialized worker-side (module lives at the bids-convert
+    # root, which is not on the workers' sys.path).
+    client.upload_file(
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                     "conversion_error_log.py")
+    )
+
     futures = client.map(
         run_job,
         df_jobs["subject"].tolist(),

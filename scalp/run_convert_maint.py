@@ -462,6 +462,12 @@ if __name__ == "__main__":
             log_directory=log_dir,
         )
         client.register_worker_plugin(_BidsConvertPath())
+        # Also ship conversion_error_log.py directly so pickled ConversionErrorLog
+        # objects deserialize even before/independent of the path plugin.
+        client.upload_file(
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "conversion_error_log.py")
+        )
 
         roots = [root + f"/{exp}/" for exp in df_jobs["experiment"].tolist()]
 
