@@ -331,9 +331,13 @@ class intracranial_BIDS_converter:
                 f"no events with valid eegoffset for {self.subject}/{self.experiment}/ses-{self.session}"
             )
         # Try one probe per unique eegfile so split-EEG mismatches on a single
-        # file don't kill the whole session.
+        # file don't kill the whole session. Some System-1 events store
+        # ``eegfile`` as an (unhashable) array per row; normalize to a scalar
+        # key so ``.unique()`` and the equality grouping below both work.
         if "eegfile" in valid.columns:
-            candidates = [valid[valid.eegfile == f].iloc[[0]] for f in valid.eegfile.unique()]
+            ef = valid.eegfile.map(
+                lambda v: str(list(v)) if isinstance(v, (list, np.ndarray)) else v)
+            candidates = [valid[ef == f].iloc[[0]] for f in ef.unique()]
         else:
             candidates = [valid.iloc[[0]]]
         dropped_ids = set()

@@ -49,7 +49,20 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     # instantiate CMLRead object, save as attribute
     def cml_reader(self):
         df = cml.get_data_index()
-        sel = df.query("subject==@self.subject & experiment==@self.experiment & session==@self.session & montage==@self.montage").iloc[0]
+        q = "subject==@self.subject & experiment==@self.experiment & session==@self.session"
+        matches = df.query(q + " & montage==@self.montage")
+        if len(matches) == 0:
+            # The caller defaults montage to 0, but some subjects/sessions are
+            # re-implants indexed under a different montage. Fall back to the
+            # index's montage for this (subject, experiment, session).
+            matches = df.query(q)
+        if len(matches) == 0:
+            raise ValueError(
+                f"no data-index entry for {self.subject}/{self.experiment}/ses-{self.session}")
+        sel = matches.iloc[0]
+        # Keep self.montage consistent with what we actually loaded so
+        # downstream paths (re-implant remap, MNI coords) use the right montage.
+        self.montage = int(sel.montage)
         reader = cml.CMLReader(subject=sel.subject, experiment=sel.experiment, session=sel.session,
                                localization=sel.localization, montage=sel.montage)
         return reader
@@ -89,6 +102,15 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         events['stim_file'] = np.where(events.trial_type=='WORD', self.wordpool_file, 'n/a')              # add wordpool to word events
         events['item_name'] = events['item'].replace('X', 'n/a')
         events = self.assign_serial_positions(events)                                                # assign serail positions to recalls
+        # Some columns (e.g. the math `test` problem = array([X, Y, Z])) hold
+        # array/list cell values. pandas' elementwise fillna/replace below does
+        # `cell == ''`, which raises "truth value of an array ... is ambiguous"
+        # on those cells. Serialize any array/list cells to scalar strings first
+        # (also makes them TSV-writable).
+        for col in events.columns:
+            if events[col].map(lambda v: isinstance(v, (list, np.ndarray))).any():
+                events[col] = events[col].map(
+                    lambda v: str(list(v)) if isinstance(v, (list, np.ndarray)) else v)
         events = events.fillna('n/a')                                                                # chnage NaN to 'n/a'
         events = events.replace('', 'n/a')                                                           # no empty cells
 
@@ -135,13 +157,26 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
 
             # recall events all given default serial position == -999 or 0
 
-            words = np.array(w_evs.item_name)
-            recs = np.array(r_evs.item_name)
-            sp = [np.argwhere(words == r)[0][0] + 1 if r in words else -999 for r in recs]
+            # Coerce to strings so the membership/argwhere comparisons stay
+            # scalar — a stray array/empty-array cell otherwise triggers a
+            # numpy broadcast error ("operands could not be broadcast ...").
+            words = np.array([str(x) for x in w_evs.item_name])
+            recs = np.array([str(x) for x in r_evs.item_name])
+            sp = []
+            for r in recs:
+                match = np.argwhere(words == r)
+                sp.append(int(match[0][0]) + 1 if len(match) else -999)
 
             serialpos.extend(sp)
 
-        events.loc[events['trial_type'] == 'REC_WORD', 'serialpos'] = serialpos
+        # Guard against a length mismatch (e.g. no REC_WORD rows but serialpos
+        # populated, or vice versa), which pandas reports as a broadcast error.
+        n_rec = int((events['trial_type'] == 'REC_WORD').sum())
+        if len(serialpos) == n_rec:
+            events.loc[events['trial_type'] == 'REC_WORD', 'serialpos'] = serialpos
+        else:
+            print(f"WARNING: serialpos length {len(serialpos)} != REC_WORD count {n_rec} "
+                  f"for {self.subject}/{self.experiment}/ses-{self.session}; leaving serialpos unset")
         return events
 
     def make_events_descriptor(self):
@@ -158,7 +193,12 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
             'TRIAL': 'Denotes new trial (list).',
             'WORD': 'Word presentation (onset).',
             'REC_WORD': 'Recalled word, onset of speech (during free recall).',
-            'REC_WORD_VV': 'Vocalization, onset of speech (during free recall).'
+            'REC_WORD_VV': 'Vocalization, onset of speech (during free recall).',
+            'RECOG_START': 'Start of recognition phase.',
+            'RECOG_END': 'End of recognition phase.',
+            'RECOG_PRES': 'Word presentation (onset) during recognition.',
+            'RECOG_RESP': 'Recognition response (old/new judgment).',
+            'RECOG_FEEDBACK': 'Feedback during recognition.',
         }
         HED = {
             "onset": {"Description": "Onset (in seconds) of the event, measured from the beginning of the acquisition of the first data point stored in the corresponding task data file."},
@@ -166,7 +206,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
             "sample": {"Description": "Onset of the event according to the sampling scheme (frequency)."},
             "trial_type": {"LongName": "Event category",
                            "Description": "Indicator of type of task action that occurs at the marked time",
-                           "Levels": {k:descriptions[k] for k in self.events["trial_type"].unique()}},
+                           "Levels": {k:descriptions.get(k, k) for k in self.events["trial_type"].unique()}},
             "response_time": {"Description": "Time (in seconds) between onset of recall phase and recall (for recalls and vocalizations), or between onset of problem on screen and response (for math problems)."},
             "stim_file": {"LongName": "Stimulus File",
                           "Description": "Location of wordpool file containing words presented in WORD events."},
@@ -191,7 +231,13 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     # ---------- Electrodes ----------
     def load_contacts(self):
         contacts = self.reader.load('contacts')
-        contacts['type'] = [x if type(x)==str else 'n/a' for x in contacts.type]      # replace missing types with 'n/a'
+        # Some (older) subjects' contacts have no `type` column at all, which
+        # made `contacts.type` raise AttributeError. Guarantee the column and
+        # normalize missing/non-string entries to 'n/a'.
+        if 'type' not in contacts.columns:
+            contacts['type'] = 'n/a'
+        else:
+            contacts['type'] = [x if isinstance(x, str) else 'n/a' for x in contacts['type']]
         return contacts
 
     def _load_mni_coords(self):
@@ -241,13 +287,22 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
             electrodes['z'] = np.nan
 
         electrodes['size'] = -999
-        electrodes['group'] = np.array(self.contacts.grpName)
-        electrodes['hemisphere'] = ['L' if 'Left' in x else 'R' if 'Right' in x else 'n/a' for x in self.contacts.Loc1]
-        electrodes['type'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in self.contacts.type]
-        electrodes['lobe'] = np.array(self.contacts.Loc2)
-        electrodes['region1'] = np.array(self.contacts.Loc3)
-        electrodes['region2'] = np.array(self.contacts.Loc5)
-        electrodes['gray_white'] = np.array(self.contacts.Loc4)
+        # Older subjects' contacts may lack grpName / Loc* columns; guard each
+        # so a missing column degrades to 'n/a' instead of raising AttributeError.
+        if 'grpName' in self.contacts.columns:
+            electrodes['group'] = np.array(self.contacts.grpName)
+        else:
+            electrodes['group'] = [re.sub(r'\d+$', '', str(lbl)) for lbl in self.contacts.label]
+        loc1 = self.contacts['Loc1'] if 'Loc1' in self.contacts.columns else ['n/a'] * len(self.contacts)
+        electrodes['hemisphere'] = ['L' if isinstance(x, str) and 'Left' in x
+                                    else 'R' if isinstance(x, str) and 'Right' in x
+                                    else 'n/a' for x in loc1]
+        electrodes['type'] = [self.ELEC_TYPES_DESCRIPTION.get(x) if isinstance(x, str) else None
+                              for x in self.contacts['type']]
+        electrodes['lobe'] = np.array(self.contacts['Loc2']) if 'Loc2' in self.contacts.columns else 'n/a'
+        electrodes['region1'] = np.array(self.contacts['Loc3']) if 'Loc3' in self.contacts.columns else 'n/a'
+        electrodes['region2'] = np.array(self.contacts['Loc5']) if 'Loc5' in self.contacts.columns else 'n/a'
+        electrodes['gray_white'] = np.array(self.contacts['Loc4']) if 'Loc4' in self.contacts.columns else 'n/a'
         electrodes = electrodes.fillna('n/a')
         electrodes = electrodes.replace('', 'n/a')
         electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type',
@@ -276,47 +331,23 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
     # ---------- Channels ----------
     def load_pairs(self):
         pairs = self.reader.load('pairs')
-        pairs['type'] = [x if type(x)==str else 'n/a' for x in pairs.type]        # replace missing types with 'n/a'
+        # Guarantee a `type` column (some subjects' pairs lack one) so the
+        # inherited base channel/sidecar logic never hits AttributeError.
+        if 'type' not in pairs.columns:
+            pairs['type'] = 'n/a'
+        else:
+            pairs['type'] = [x if isinstance(x, str) else 'n/a' for x in pairs['type']]
         return pairs
 
-    def pairs_to_channels(self):
-        channels = pd.DataFrame({'name': np.array(self.pairs.label)})
-        channels['type'] = [self.ELEC_TYPES_BIDS.get(x.upper()) for x in self.pairs.type]
-        channels['units'] = 'V'                                                    # convert EEG to V
-        channels['low_cutoff'] = 'n/a'                                             # highpass filter (don't actually know this for clinical eeg)
-        channels['high_cutoff'] = 'n/a'                                            # lowpass filter (mne adds Nyquist frequency = 2 x sampling rate)
-        channels['reference'] = 'bipolar'
-        channels['group'] = np.array(self.pairs.grpName)
-        channels['sampling_frequency'] = self.sfreq
-        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x.upper()) for x in self.pairs.type]
-        channels['notch'] = 'n/a'
-        channels = channels.fillna('n/a')                                          # remove NaN
-        channels = channels.replace('', 'n/a')                                     # no empty cells
-        return channels
-
-    def contacts_to_channels(self):
-        channels = pd.DataFrame({'name': np.array(self.contacts.label)})
-        channels['type'] = [self.ELEC_TYPES_BIDS.get(x.upper()) if x.upper() in self.ELEC_TYPES_BIDS.keys() else
-                            self.CH_TYPES.get(self.subject) for x in self.contacts.type]
-        channels['units'] = 'V'                                                    # convert EEG to V
-        channels['low_cutoff'] = 'n/a'                                             # highpass filter (don't actually know this for clinical eeg)
-        channels['high_cutoff'] = 'n/a'                                            # lowpass filter (mne adds Nyquist frequency = 2 x sampling rate)
-        channels['group'] = np.array(self.contacts.grpName)
-        channels['sampling_frequency'] = self.sfreq
-        channels['description'] = [self.ELEC_TYPES_DESCRIPTION.get(x.upper()) for x in self.contacts.type]
-        channels['notch'] = 'n/a'
-        channels = channels.fillna('n/a')                                          # remove NaN
-        channels = channels.replace('', 'n/a')                                     # no empty cells
-        return channels
+    # NOTE: contacts_to_channels / pairs_to_channels / eeg_metadata /
+    # eeg_bi_to_BIDS / eeg_mono_to_BIDS / run() are intentionally NOT overridden
+    # here. They are inherited from intracranial_BIDS_converter, whose modern
+    # implementations provide per-stage resilience, phantom-contact filtering,
+    # channel reconciliation, and the EDF/BDF digital-writer EEG path. Only the
+    # genuinely pyFR-specific pieces (events, wordpool, re-implant sessions,
+    # coordinate spaces, and the eeg_sidecar channel-count fields) are kept.
 
     # ---------- EEG ----------
-    # set sfreq and recording_duration attributes
-    def eeg_metadata(self):
-        eeg = self.reader.load_eeg()
-        sfreq = eeg.samplerate
-        recording_duration = eeg.data.shape[-1] / sfreq
-        return sfreq, recording_duration
-
     def eeg_sidecar(self, ref):                 # overwrite for different 'type' field
         sidecar = {'TaskName': self.experiment}
         sidecar['TaskDescription'] = 'delayed free recall of word lists'
@@ -340,77 +371,3 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
             sidecar['MiscChannelCount'] = len(self.contacts[self.contacts.type=='n/a'].index)
             sidecar['EEGChannelCount'] = 0
         return sidecar
-
-    # ---------- EEG (monopolar) ----------
-    def eeg_mono_to_BIDS(self):
-        eeg = self.reader.load_eeg(scheme=self.contacts)
-        eeg.data = eeg.data / self.unit_scale              # convert to V before instantiating raw object
-        eeg_mne = eeg.to_mne()
-        mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_mono.type]))    # ecog or seeg
-        eeg_mne.set_channel_types(mapping)                                                     # set channel types
-
-        return eeg_mne
-
-    # ---------- EEG (bipolar) ----------
-    def eeg_bi_to_BIDS(self):
-        eeg = self.reader.load_eeg(scheme=self.pairs)
-        eeg.data = eeg.data / self.unit_scale               # convert to V before instantiating raw object
-        eeg_mne = eeg.to_mne()
-        mapping = dict(zip(eeg_mne.ch_names, [x.lower() for x in self.channels_bi.type]))
-        eeg_mne.set_channel_types(mapping)
-
-        return eeg_mne
-
-    # ---------------------------------
-    # run conversion
-    def run(self):
-        # ---------- Events ----------
-        self.reader = self.cml_reader()
-        self.wordpool_file = self.set_wordpool()
-        self.events = self.events_to_BIDS()
-        self.events_descriptor = self.make_events_descriptor()
-        self.write_BIDS_beh()
-
-        # terminate if no monopolar or bipolar EEG
-        if not self.monopolar and not self.bipolar:
-            return True
-
-        # ---------- EEG metadata ----------
-        self.sfreq, self.recording_duration = self.eeg_metadata()
-
-        # ---------- Electrodes ----------
-        self.contacts = self.load_contacts()
-
-        if self.tal or self.mni:
-            from ..intracranial_BIDS_converter import CML_TO_BIDS_SPACE
-            available = self._available_cml_spaces()
-            if not available:
-                print(f"WARNING: no known CML coordinate spaces found for {self.subject}")
-            for cml_space in available:
-                bids_space = CML_TO_BIDS_SPACE[cml_space]
-                print(f"WRITING: electrodes (cml={cml_space}, space={bids_space}) for {self.subject}/{self.experiment}/ses-{self.session}")
-                electrodes = self.contacts_to_electrodes(cml_space)
-                sidecar = self.make_electrodes_sidecar(cml_space)
-                self.write_BIDS_electrodes(cml_space, electrodes, sidecar)
-                self.write_BIDS_coords(cml_space)
-
-        # ---------- Channels ----------
-        self.pairs = self.load_pairs()
-        if self.bipolar:
-            self.channels_bi = self.pairs_to_channels()
-        if self.monopolar:
-            self.channels_mono = self.contacts_to_channels()
-
-        # ---------- EEG ----------
-        if self.bipolar:
-            self.eeg_sidecar_bi = self.eeg_sidecar('bipolar')
-            self.eeg_bi = self.eeg_bi_to_BIDS()
-            self.write_BIDS_ieeg('bipolar')
-            self.write_BIDS_channels('bipolar')
-        if self.monopolar:
-            self.eeg_sidecar_mono = self.eeg_sidecar('monopolar')
-            self.eeg_mono = self.eeg_mono_to_BIDS()
-            self.write_BIDS_ieeg('monopolar')
-            self.write_BIDS_channels('monopolar')
-
-        return True
