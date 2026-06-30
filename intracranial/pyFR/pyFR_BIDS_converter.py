@@ -49,7 +49,9 @@ def _patch_cmlreaders_params_reader():
     """
     from cmlreaders.readers.eeg import EEGMetaReader, SplitEEGReader
     from cmlreaders.readers.readers import EventReader
+    from cmlreaders.path_finder import PathFinder
     from pathlib import Path as _Path
+    import glob as _glob
     if getattr(EEGMetaReader, "_pyfr_params_patched", False):
         return
 
@@ -95,6 +97,11 @@ def _patch_cmlreaders_params_reader():
                 lambda v: (v.item() if getattr(v, "size", None) == 1
                            else ("" if getattr(v, "size", None) == 0 else str(v[0])))
                 if isinstance(v, np.ndarray) else v)
+        # Re-implant event files store `subject` as `<subject>_<montage>` (e.g.
+        # TJ035_1); cmlreaders' load_eeg rejects events whose subject != the
+        # reader's. Normalize to the reader's base subject.
+        if "subject" in df.columns:
+            df["subject"] = self.subject
         # `df.loc[:, col] = scalar` raises on an empty (no-index) frame; plain
         # assignment is safe whether or not the frame has rows.
         if "experiment" not in df.columns:
@@ -118,9 +125,51 @@ def _patch_cmlreaders_params_reader():
                 df = df.sort_values(by='mstime', ascending=True, ignore_index=True)
         return df
 
+    _orig_find = PathFinder.find
+
+    def _find(self, data_type, *args, **kwargs):
+        try:
+            return _orig_find(self, data_type, *args, **kwargs)
+        except FileNotFoundError:
+            # cmlreaders' EEGReader.load builds a PathFinder WITHOUT montage, so
+            # for re-implant (montage>0) pyFR subjects the task_events lookup
+            # resolves `{subject}_events.mat` and misses the real
+            # `{subject}_{montage}_events.mat`. Fall back to the montage-suffixed
+            # events file on a miss.
+            if data_type not in ("task_events", "all_events"):
+                raise
+            if getattr(self, "experiment", None) != "pyFR":
+                raise
+            root = getattr(self, "rootdir", "") or "/"
+            cands = sorted(_glob.glob(os.path.join(
+                root, "data", "events", "pyFR", f"{self.subject}_*_events.mat")))
+            cands = [c for c in cands
+                     if re.fullmatch(rf"{self.subject}_\d+_events\.mat", os.path.basename(c))]
+            if len(cands) == 1:
+                return cands[0]
+            if len(cands) > 1:
+                # Disambiguate multi-montage subjects via the data index. Use
+                # boolean masking with explicit int coercion (session dtype
+                # varies across the index / PathFinder), not .query with @-vars.
+                idx = cml.get_data_index()
+                try:
+                    sess = int(self.session)
+                    m = idx[(idx["subject"] == self.subject)
+                            & (idx["experiment"] == "pyFR")
+                            & (idx["session"].astype(int) == sess)]
+                except (TypeError, ValueError):
+                    m = idx.iloc[0:0]
+                if len(m):
+                    p = os.path.join(root, "data", "events", "pyFR",
+                                     f"{self.subject}_{int(m.iloc[0]['montage'])}_events.mat")
+                    if os.path.exists(p):
+                        return p
+            raise
+
     EEGMetaReader._read_params_txt = _read_params_txt
     SplitEEGReader._get_files = _get_files
     EventReader._read_matlab_events = _read_matlab_events
+    PathFinder.find = _find
     EEGMetaReader._pyfr_params_patched = True
 
 
