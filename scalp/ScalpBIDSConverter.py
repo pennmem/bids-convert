@@ -33,6 +33,24 @@ class ScalpBIDSConverter:
     # or "brainvision" (IEEE float32 .vhdr/.eeg/.vmrk). Change here in code.
     egi_output_format = "brainvision"
 
+    # Manual raw-file pins for sessions where locate_raw_file() finds more than
+    # one *real* recording and cannot safely choose (picking wrong = wrong
+    # data). Keyed by (subject_raw, session) -> chosen basename (or absolute
+    # path). Consulted before raising MultiplePathsError. Leave a session
+    # uncommented only once the lab has confirmed the intended recording.
+    MANUAL_EEG_FILE = {
+        # ---- multiple real .mff (pick the intended recording) ----
+        # ("LTP298", 9):  "LTP298_20150709_112120.mff",   # also 0624, 0707
+        # ("LTP299", 17): "LTP299_20150810_020740.mff",   # also 0806
+        # ("LTP314", 7):  "LTP314_20151028_111152.mff",   # also 100822
+        # ("LTP326", 3):  "LTP326_20160614_092306.mff",   # also 091658
+        # ---- split .bdf: both parts large & real; may need concatenation ----
+        # ("LTP344", 9):  "LTP344_session_9.bdf",   # + _9_1.bdf (2.7G)
+        # ("LTP365", 23): "LTP365_session_23.bdf",  # + _23_2.bdf (1.3G)
+        # ("LTP369", 20): "LTP369_session_20.bdf",  # + _20_2.bdf (2.6G)
+        # ("LTP386", 13): "LTP386_session_13.bdf",  # + _13_2.bdf (1.5G)
+    }
+
     event_column_dict = {
         "ltpFR": ['subject', 'experiment', 'session', 'trial', 'task', 'item_name', 'item_num', 'recog_resp', 'recog_conf', 
                   'resp', 'answer', 'test_x', 'test_y', 'test_z', 'color_r', 'color_g', 'color_b', 'case', 'font'],
@@ -394,27 +412,81 @@ class ScalpBIDSConverter:
 
     
     def locate_raw_file(self):
-        # hacky way to find all matching files!
-        raw_file = glob(f"/data/eeg/scalp/ltp/{self.experiment}/{self.subject_raw}/session_{self.session}/eeg/*.raw*") + \
-                glob(f"/data/eeg/scalp/ltp/{self.experiment}/{self.subject_raw}/session_{self.session}/eeg/*.bdf*") + \
-                glob(f"/data/eeg/scalp/ltp/{self.experiment}/{self.subject_raw}/session_{self.session}/eeg/*.mff*")
-        if len(raw_file)==0:
-            raise FileNotFoundError
-        elif len(raw_file)>1:
-            raw_file = [os.path.realpath(p) for p in raw_file]
-            print(np.unique(raw_file))
-            if len(np.unique(raw_file))>1:
-                if np.unique(raw_file)[0].endswith(".raw"):
-                    print(np.unique(raw_file)[0])
-                    raw_file = np.unique(raw_file)[0]
-                else:
-                    raise MultiplePathsError(f"{raw_file}")
-            else:
-                raw_file = raw_file[0]
-        else:
-            raw_file = raw_file[0]
-            print(f"Raw File Found:", raw_file)
-        return raw_file
+        """Find the single canonical raw EEG file for this session.
+
+        Globs the session eeg dir, then filters out non-EEG and junk paths
+        before choosing:
+          * extension whitelist: keep only names ending exactly in .raw / .bdf
+            / .mff (drops .raw.txt, .raw.txt.bz2, *_GAIN.txt, *_IMP*.txt);
+          * drop empty .mff placeholder dirs (e.g. *_NEVER_EXPORTED.mff and
+            empty wrong-subject stubs);
+          * drop files whose basename doesn't start with the subject code
+            (wrong-subject / prefixless exports);
+          * drop malformed basenames containing a backslash (corrupt stubs).
+        When a single real .mff coexists with .raw file(s) of the same session,
+        the native .mff wins. Genuinely ambiguous sessions (multiple real .mff,
+        or split .bdf) are pinned via MANUAL_EEG_FILE, else raise
+        MultiplePathsError listing only the surviving real candidates.
+        """
+        eeg_dir = (f"/data/eeg/scalp/ltp/{self.experiment}/"
+                   f"{self.subject_raw}/session_{self.session}/eeg")
+
+        # Manual pin takes precedence (basename or absolute path).
+        pin = ScalpBIDSConverter.MANUAL_EEG_FILE.get(
+            (self.subject_raw, int(self.session))
+        )
+        if pin is not None:
+            pinned = pin if os.path.isabs(pin) else os.path.join(eeg_dir, pin)
+            if not os.path.exists(pinned):
+                raise FileNotFoundError(
+                    f"MANUAL_EEG_FILE pin does not exist: {pinned}")
+            print(f"Raw File (manual pin): {pinned}")
+            return pinned
+
+        candidates = (glob(os.path.join(eeg_dir, "*.raw*"))
+                      + glob(os.path.join(eeg_dir, "*.bdf*"))
+                      + glob(os.path.join(eeg_dir, "*.mff*")))
+
+        def _keep(p):
+            base = os.path.basename(p)
+            if "\\" in base:                       # malformed / corrupt stub
+                return False
+            if not base.startswith(self.subject_raw):   # wrong-subject / prefixless
+                return False
+            if not base.endswith((".raw", ".bdf", ".mff")):  # sidecars
+                return False
+            if base.endswith(".mff") and os.path.isdir(p) and not os.listdir(p):
+                return False                       # empty .mff placeholder
+            return True
+
+        real = [p for p in candidates if _keep(p)]
+
+        # Dedupe by realpath, preserving order.
+        seen, deduped = set(), []
+        for p in real:
+            rp = os.path.realpath(p)
+            if rp not in seen:
+                seen.add(rp)
+                deduped.append(p)
+
+        if len(deduped) == 0:
+            raise FileNotFoundError(
+                f"No raw EEG file found in {eeg_dir} "
+                f"(candidates before filtering: {candidates})")
+        if len(deduped) == 1:
+            print(f"Raw File Found: {deduped[0]}")
+            return deduped[0]
+
+        # >1 survivor: prefer a single native .mff over .raw file(s).
+        mffs = [p for p in deduped if p.endswith(".mff")]
+        non_mff = [p for p in deduped if not p.endswith(".mff")]
+        if len(mffs) == 1 and all(p.endswith(".raw") for p in non_mff):
+            print(f"Raw File Found (preferring .mff over .raw): {mffs[0]}")
+            return mffs[0]
+
+        raise MultiplePathsError(
+            f"Multiple real EEG files for {self.subject_raw} "
+            f"session {self.session}; pin one in MANUAL_EEG_FILE: {deduped}")
     
     def load_scalp_eeg(self):
         if self.file_type == ".bdf":
@@ -447,7 +519,10 @@ class ScalpBIDSConverter:
             self.eeg_sidecar["Manufacturer"] = "EGI"
             self.eeg_sidecar["CapManufacturer"] = "EGI"
             self.eeg_sidecar["EEGReference"] = "Cz"
-            self.raw_file.rename_channels({'E129': 'Cz'})
+            # Some EGI nets don't expose the vertex reference as an explicit
+            # E129 channel; only rename when present (avoids a hard ValueError).
+            if 'E129' in self.raw_file.ch_names:
+                self.raw_file.rename_channels({'E129': 'Cz'})
             if "sync" in self.raw_file.ch_names:
                 # GSN 200 v2.1 caps
                 self.eeg_sidecar["CapManufacturersModelName"] = "Geodisic Sensor Net 200 v2.1"

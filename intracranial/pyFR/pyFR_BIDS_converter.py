@@ -47,11 +47,32 @@ def _patch_cmlreaders_params_reader():
     Only the params.txt / split-EEG / matlab-events paths are affected
     (pyFR-type data); r1/ltp experiments read sources.json and HDF5. Idempotent.
     """
-    from cmlreaders.readers.eeg import EEGMetaReader, SplitEEGReader
+    from cmlreaders.readers.eeg import EEGMetaReader, SplitEEGReader, EEGReader
     from cmlreaders.readers.readers import EventReader
     from cmlreaders.path_finder import PathFinder
     from pathlib import Path as _Path
     import glob as _glob
+
+    def _eegfile_to_str(v):
+        """Coerce one `eegfile` cell to a clean scalar string.
+
+        Old/System-1 pyFR events store `eegfile` per row as a numpy array
+        (often the empty ``array([], dtype='<U1')`` for non-EEG events) or a
+        float/NaN scalar. cmlreaders' ``to_absolute`` does
+        ``row["eegfile"].startswith("/")`` and crashes on any non-str.
+        """
+        if isinstance(v, str):
+            return v
+        if isinstance(v, np.ndarray):
+            size = getattr(v, "size", None)
+            if size == 0:
+                return ""
+            if size == 1:
+                return _eegfile_to_str(v.item())
+            return _eegfile_to_str(v.flat[0])
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return ""
+        return str(v)
     if getattr(EEGMetaReader, "_pyfr_params_patched", False):
         return
 
@@ -89,14 +110,12 @@ def _patch_cmlreaders_params_reader():
             df["session"] = self.session
         if self.session is not None:
             df = df[df["session"] == self.session]
-        # Some System-1 events store `eegfile` as a numpy array per row, which
-        # breaks cmlreaders' to_absolute (`row["eegfile"].startswith("/")`).
-        # Coerce to a scalar string.
+        # Some System-1 events store `eegfile` as a numpy array, and some old
+        # sessions store it as a float/NaN scalar; both break cmlreaders'
+        # to_absolute. Coerce here (and again at _eegfile_absolute, which also
+        # catches events loaded via other reader paths).
         if "eegfile" in df.columns:
-            df["eegfile"] = df["eegfile"].map(
-                lambda v: (v.item() if getattr(v, "size", None) == 1
-                           else ("" if getattr(v, "size", None) == 0 else str(v[0])))
-                if isinstance(v, np.ndarray) else v)
+            df["eegfile"] = df["eegfile"].map(_eegfile_to_str)
         # Re-implant event files store `subject` as `<subject>_<montage>` (e.g.
         # TJ035_1); cmlreaders' load_eeg rejects events whose subject != the
         # reader's. Normalize to the reader's base subject.
@@ -166,9 +185,22 @@ def _patch_cmlreaders_params_reader():
                         return p
             raise
 
+    # EEGReader.load builds the events frame via whichever event reader the
+    # source declares (not always the patched _read_matlab_events), so empty
+    # ndarray / float eegfile cells can still reach to_absolute. Normalize the
+    # eegfile column at the entry to _eegfile_absolute as a catch-all.
+    _orig_eegfile_absolute = EEGReader._eegfile_absolute
+
+    def _eegfile_absolute(self, events):
+        if "eegfile" in getattr(events, "columns", []):
+            events = events.copy()
+            events["eegfile"] = events["eegfile"].map(_eegfile_to_str)
+        return _orig_eegfile_absolute(self, events)
+
     EEGMetaReader._read_params_txt = _read_params_txt
     SplitEEGReader._get_files = _get_files
     EventReader._read_matlab_events = _read_matlab_events
+    EEGReader._eegfile_absolute = _eegfile_absolute
     PathFinder.find = _find
     EEGMetaReader._pyfr_params_patched = True
 
@@ -252,6 +284,14 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
 
     def events_to_BIDS(self):
         events = self._load_events()     # cmlreaders now loads in math events automatically
+
+        # An empty events frame (e.g. TJ074: corrupt/empty event .mat) has no
+        # mstime[0] to anchor onsets; fail cleanly rather than IndexError on
+        # `.iloc[0]` so the stage is attributed correctly.
+        if events is None or len(events) == 0:
+            raise ValueError(
+                f"Events DataFrame is empty for {self.subject} ses-{self.session}; "
+                "event .mat likely empty or not uploaded.")
 
         # transformations
         events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type'})                  # rename columns
