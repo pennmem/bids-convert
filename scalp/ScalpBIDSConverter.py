@@ -322,6 +322,11 @@ class ScalpBIDSConverter:
             self.raw_file = self.load_scalp_eeg()
             self.set_montage()
             self.events = self.load_events()
+            # events_descriptor is otherwise only built in the behavioral
+            # stage; build it here too so the eeg/montage stages are
+            # self-sufficient when behavioral is skipped (e.g. a re-run with
+            # --override-eeg/--override-montage but existing behavioral output).
+            self.make_event_descriptors()
         except Exception as exc:
             # Both downstream stages depend on the source EEG; fail them together.
             self._report_stage_failure(['eeg', 'montage'], 'EEG load', exc)
