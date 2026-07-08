@@ -649,7 +649,9 @@ class ScalpBIDSConverter:
             "TRIAL_END": "End of a trial.",
             "VALUE_RECALL": "Subject’s value recall response for the current list or item.",
             "ITEM_VALUE_RECALL": "Subject’s value recall response for an individual item (VCFROP).",
+            "PRACTICE_ITEM_VALUE_RECALL": "Subject’s value recall response for an individual item (in a practice list).",
             "AVG_VALUE_RECALL": "Subject’s recalled estimate of the average value for the current list/delivery day (VCFROP).",
+            "PRACTICE_AVG_VALUE_RECALL": "Subject’s recalled estimate of the average value for the current list/delivery day (in a practice list).",
             "FINAL_COMPENSATION": "Event marking display and computation of final monetary compensation.",
             "EFR_MARK": "Externalized free recall: participants say the items the remember outloud."
         }
