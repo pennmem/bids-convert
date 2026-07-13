@@ -298,7 +298,7 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0        # event duration [s]
         events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)                  # replace events with negative duration with 0.0 s
         events = self.apply_event_durations(events)                                                  # apply well-defined durations [s]
-        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                           # onset from first event [s]
+        events['onset'] = self._onset_from_sample(events)                                            # onset from eegoffset/sfreq [s] (recording-relative)
         events['response_time'] = 'n/a'                                                              # response time [s]
         events.loc[(events.trial_type=='REC_WORD') | (events.trial_type=='REC_WORD_VV') |
                    (events.trial_type=='PROB'), 'response_time'] = events['rectime'] / 1000.0

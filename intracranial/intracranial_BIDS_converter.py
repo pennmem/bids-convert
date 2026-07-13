@@ -240,6 +240,40 @@ class intracranial_BIDS_converter:
         should call this in place of self.reader.load('events')."""
         return self.reader.load('events')
 
+    def _sfreq_hz(self):
+        """Sampling rate in Hz, obtained cheaply and cached.
+
+        Needed inside events_to_BIDS() to make event onsets recording-relative
+        before the EEG signal has been loaded. `self.sfreq` is only set later
+        in run() (and only when an EEG stage runs), so fall back to the
+        sources.json metadata, which carries `sample_rate` without loading any
+        signal (works even for behavioral-only conversions)."""
+        if getattr(self, "sfreq", None):
+            return float(self.sfreq)
+        if getattr(self, "_sfreq_cached", None):
+            return self._sfreq_cached
+        sources = self.reader.load("sources")
+        # cmlreaders returns a dict for a single source, a DataFrame when split
+        if isinstance(sources, dict):
+            sr = sources["sample_rate"]
+        else:
+            sr = sources["sample_rate"].iloc[0]
+        self._sfreq_cached = float(sr)
+        return self._sfreq_cached
+
+    def _onset_from_sample(self, events):
+        """BIDS `onset` (seconds from the first recorded EEG sample) computed
+        from the recording-aligned `sample` column (= corrected `eegoffset`).
+
+        This is the frame BIDS requires ("measured from the beginning of the
+        acquisition of the first data point"). Do NOT anchor onset to the first
+        event's mstime: the EEG does not start at the first behavioral event,
+        and the wall clock drifts from the sample clock whenever the recording
+        is a clip of a longer session. Rows with no valid recording sample
+        (eegoffset < 0, i.e. events before EEG start) get 'n/a'."""
+        onset = events["sample"] / self._sfreq_hz()
+        return onset.mask(events["sample"] < 0, "n/a")
+
     def set_wordpool(self):
         raise NotImplementedError       # override in subclass
 

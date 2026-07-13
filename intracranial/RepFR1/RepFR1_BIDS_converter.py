@@ -34,7 +34,7 @@ class RepFR1_BIDS_converter(intracranial_BIDS_converter):
         events.loc[events['type'] == 'SESS_END', 'list'] = -999                                      # some SESS_END events get final list +1, just set all to default
         
         events = events.rename(columns={'eegoffset':'sample', 'type':'trial_type'})                  # rename columns
-        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0                           # onset from first event [s]
+        events['onset'] = self._onset_from_sample(events)                                            # onset from eegoffset/sfreq [s] (recording-relative)
         events['duration'] = np.concatenate((np.diff(events.mstime), np.array([0]))) / 1000.0        # event duration [s]
         events['duration'] = events['duration'].mask(events['duration'] < 0.0, 0.0)                  # replace events with negative duration with 0.0 s
         events = self.apply_event_durations(events)                                                  # apply well-defined durations [s]

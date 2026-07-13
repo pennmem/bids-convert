@@ -18,7 +18,7 @@ class PS21_BIDS_converter(intracranial_BIDS_converter):
         events = self._load_events()
         events = self.unpack_stim_params(events)                        # convert stimulation parameters into columns
         events = events.rename(columns={'eegoffset': 'sample', 'type': 'trial_type', 'stim_on': 'stimulation'})
-        events['onset'] = (events.mstime - events.mstime.iloc[0]) / 1000.0     # onset from first event [s]
+        events['onset'] = self._onset_from_sample(events)     # onset from eegoffset/sfreq [s] (recording-relative)
         events = self.apply_event_durations(events)                             # apply well-defined durations [s]
 
         events = events.fillna('n/a')                  # change NaN to 'n/a'
