@@ -75,7 +75,7 @@ class intracranial_BIDS_converter:
     BRAIN_REGIONS = ['wb.region', 'ind.region', 'das.region', 'stein.region']
     CATEGORY_KEYS = ('bad_channel', 'soz', 'interictal', 'brain_lesion')
 
-    STAGES = ('behavioral', 'electrodes',
+    STAGES = ('behavioral', 'electrodes', 'bi-electrodes',
               'mono-eeg', 'bi-eeg',
               'mono-channels', 'bi-channels')
 
@@ -135,6 +135,16 @@ class intracranial_BIDS_converter:
             for tsv in tsvs:
                 base = tsv[:-len('_electrodes.tsv')]
                 if os.path.exists(base + '_electrodes.json') and os.path.exists(base + '_coordsystem.json'):
+                    return True
+            return False
+        if stage == 'bi-electrodes':
+            # At least one space-*_acq-bipolar_electrodes.tsv + matching .json.
+            if not os.path.isdir(ieeg_dir):
+                return False
+            tsvs = glob(os.path.join(ieeg_dir, f'{prefix}_space-*_acq-bipolar_electrodes.tsv'))
+            for tsv in tsvs:
+                base = tsv[:-len('_electrodes.tsv')]
+                if os.path.exists(base + '_electrodes.json'):
                     return True
             return False
         if stage in ('mono-channels', 'bi-channels'):
@@ -436,8 +446,11 @@ class intracranial_BIDS_converter:
         return area_map
     
     # which CML spaces have data (coords or region column) in contacts_all
-    def _available_cml_spaces(self):
-        contacts = getattr(self, 'contacts_all', self.contacts)
+    def _available_cml_spaces(self, source='contacts'):
+        if source == 'pairs':
+            contacts = getattr(self, 'pairs_all', getattr(self, 'pairs', None))
+        else:
+            contacts = getattr(self, 'contacts_all', self.contacts)
         cols = set(contacts.columns)
         available = []
         for cml_space in CML_TO_BIDS_SPACE.keys():
@@ -584,14 +597,18 @@ class intracranial_BIDS_converter:
             },
         }
 
-    def _space_file(self, cml_space, suffix, extension):
-        """Build `sub-X_ses-Y_task-Z_space-<label>[_desc-<variant>]_<suffix>.<ext>`
+    def _space_file(self, cml_space, suffix, extension, acq=None):
+        """Build `sub-X_ses-Y_task-Z_space-<label>[_desc-<variant>][_acq-<acq>]_<suffix>.<ext>`
         directly, bypassing mne_bids.BIDSPath validation (which doesn't
         accept the `desc-` entity for electrodes/coordsystem files).
 
         For lab-specific spaces (CML key in CML_TO_BIDS_DESC), the BIDS
         space label is `Other` and the variant is encoded as `desc-<variant>`.
         For standard spaces (mni / tal / avg / vox), no `desc-` is added.
+
+        `acq` (e.g. 'bipolar') encodes an acquisition entity — used for the
+        deprecated bipolar electrodes files. It is not a schema-valid entity
+        on electrodes files, so callers must `.bidsignore` those paths.
         """
         bids_space = CML_TO_BIDS_SPACE[cml_space]
         desc = CML_TO_BIDS_DESC.get(cml_space)
@@ -600,6 +617,8 @@ class intracranial_BIDS_converter:
         parts = [self._bids_prefix(), f'space-{bids_space}']
         if desc:
             parts.append(f'desc-{desc}')
+        if acq:
+            parts.append(f'acq-{acq}')
         parts.append(suffix)
         fname = '_'.join(parts) + extension
         return os.path.join(ieeg_dir, fname)
@@ -629,6 +648,113 @@ class intracranial_BIDS_converter:
     def write_BIDS_coords(self, cml_space):
         with open(self._space_file(cml_space, 'coordsystem', '.json'), 'w') as f:
             json.dump(fp=f, obj=self._coordinate_system(cml_space))
+        self._ensure_bidsignore_for_space(cml_space)
+
+    # ---------- Bipolar electrodes (DEPRECATED, non-BIDS) ----------
+    # BIDS has no bipolar-electrode concept: electrodes.tsv describes
+    # physical monopolar contacts, and bipolar positions are meant to be
+    # derived downstream by averaging the two contacts. That derivation
+    # cannot reproduce the CML pair *region* labels (wb/ind/das/stein),
+    # which neurorad assigns by an independent atlas lookup at each pair's
+    # midpoint voxel and which live only in the original pairs.json. To keep
+    # analyses that used those labels replicable, we preserve the original
+    # CML bipolar localization here as a `.bidsignore`d
+    # `..._acq-bipolar_electrodes.tsv` mirroring the monopolar schema.
+    def pairs_to_bipolar_electrodes(self, cml_space):
+        # Use the full pairs set (including dropped/phantom pairs) so the
+        # table aligns 1:1 with acq-bipolar_channels.tsv.
+        pairs = getattr(self, 'pairs_all', self.pairs)
+        labels = np.array(pairs.label)
+        names = [self._truncate_bipolar(n) if len(n) > 16 else n for n in labels]
+        electrodes = pd.DataFrame({'name': names})
+        electrodes['label_full'] = labels
+
+        # contact identity of the two contacts forming each pair
+        for col in ('contact_1', 'contact_2'):
+            electrodes[col] = pairs[col].values if col in pairs.columns else np.nan
+
+        # x/y/z pair midpoint — NaN if this space has no coord columns
+        for axis in ('x', 'y', 'z'):
+            col = f'{cml_space}.{axis}'
+            electrodes[axis] = pairs[col].values if col in pairs.columns else np.nan
+
+        # electrode group (shank) — same rule as pairs_to_channels
+        electrodes['group'] = [re.sub('\d+', '', x).split('-')[0] for x in labels]
+
+        if self.area:
+            electrodes['size'] = [self.area_map.get(x) if x in self.area_map.keys() else -999 for x in electrodes.group]
+        else:
+            electrodes['size'] = -999
+
+        electrodes['hemisphere'] = [
+            'L' if isinstance(x, (int, float)) and not pd.isna(x) and x < 0
+            else 'R' if isinstance(x, (int, float)) and not pd.isna(x) and x > 0
+            else 'n/a'
+            for x in electrodes.x
+        ]
+
+        type_col = 'type_1' if 'type_1' in pairs.columns else 'type'
+        electrodes['type'] = [self.ELEC_TYPES_DESCRIPTION.get(x) for x in pairs[type_col]]
+
+        # anatomical regions — include every configured region column;
+        # fill with NaN when the column is absent from pairs.
+        br_cols = []
+        for br in self.BRAIN_REGIONS:
+            if self.brain_regions.get(br, 0) > 0:
+                electrodes[br] = pairs[br].values if br in pairs.columns else np.nan
+                br_cols.append(br)
+
+        electrodes = electrodes.fillna('n/a')
+        electrodes = electrodes.replace('', 'n/a')
+
+        electrodes = electrodes[['name', 'label_full', 'contact_1', 'contact_2',
+                                 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type'] + br_cols]
+        return electrodes
+
+    def make_bipolar_electrodes_sidecar(self, cml_space):
+        bids_space = CML_TO_BIDS_SPACE[cml_space]
+        sidecar = {
+            "Description": (
+                "DEPRECATED, non-BIDS bipolar localization. BIDS has no "
+                "bipolar-electrode concept; this table preserves the original "
+                "CML pair localization (midpoint coordinates + region labels) "
+                "for replicability. Pair region labels cannot be recomputed "
+                "from the monopolar electrodes.tsv. x/y/z are the pair "
+                "midpoint: the mean of the two contacts for MNI; for other "
+                "atlases taken directly from pairs.json."
+            ),
+            "name":       {"Description": "Truncated bipolar pair label (matches acq-bipolar_channels.tsv 'name')."},
+            "label_full": {"Description": "Full, untruncated bipolar pair label."},
+            "contact_1":  {"Description": "Contact number of the first (anode) contact of the pair."},
+            "contact_2":  {"Description": "Contact number of the second (cathode) contact of the pair."},
+            "x":          {"Description": f"x-axis position in {bids_space} coordinates."},
+            "y":          {"Description": f"y-axis position in {bids_space} coordinates."},
+            "z":          {"Description": f"z-axis position in {bids_space} coordinates."},
+            "size":       {"Description": "Surface area of electrode."},
+            "group":      {"Description": "Group of channels electrode belongs to (same shank)."},
+            "hemisphere": {"Description": "Hemisphere of electrode location."},
+            "type":       {"Description": "Type of electrode."},
+        }
+
+        if self.brain_regions.get('wb.region', 0) > 0:
+            sidecar['wb.region'] = {"Description": "Brain region of electrode location from subcortical neuroradiology pipeline."}
+        if self.brain_regions.get('ind.region', 0) > 0:
+            sidecar['ind.region'] = {"Description": "Brain region of electrode location from surface neuroradiology pipeline."}
+        if self.brain_regions.get('das.region', 0) > 0:
+            sidecar['das.region'] = {"Description": "Brain region of electrode location from hand annotations by neuroradiologist.  Usually in MTL."}
+        if self.brain_regions.get('stein.region', 0) > 0:
+            sidecar['stein.region'] = {"Description": "Brain region of electrode location from hand annotations by neurologist.  Usually in MTL."}
+
+        return sidecar
+
+    def write_BIDS_bipolar_electrodes(self, cml_space, electrodes, sidecar):
+        self._to_tsv(electrodes, self._space_file(cml_space, 'electrodes', '.tsv', acq='bipolar'))
+        with open(self._space_file(cml_space, 'electrodes', '.json', acq='bipolar'), 'w') as f:
+            json.dump(fp=f, obj=sidecar)
+        # acq-bipolar is not a schema-valid entity on electrodes files, so
+        # the bids-validator must skip these deprecated files.
+        self._ensure_bidsignore_pattern('**/*_acq-bipolar_electrodes.tsv')
+        self._ensure_bidsignore_pattern('**/*_acq-bipolar_electrodes.json')
         self._ensure_bidsignore_for_space(cml_space)
 
     # ---------- Channels ----------
@@ -1218,7 +1344,7 @@ class intracranial_BIDS_converter:
     # exist), 'failed' (stage raised but run() continued), or 'not_run'
     # (skipped because an upstream stage failed). Exception info is kept
     # for the first stage that raised.
-    ALL_STAGES = ('behavioral', 'electrodes', 'bi-eeg', 'bi-channels', 'mono-eeg', 'mono-channels')
+    ALL_STAGES = ('behavioral', 'electrodes', 'bi-electrodes', 'bi-eeg', 'bi-channels', 'mono-eeg', 'mono-channels')
 
     def stage_report(self):
         # Outcomes: 'ok' (wrote), 'skipped' (already on disk), 'failed', 'not_run'.
@@ -1323,8 +1449,9 @@ class intracranial_BIDS_converter:
         run_mono_channels = self._should_run('mono-channels')
         run_bi_channels = self._should_run('bi-channels')
         run_electrodes = self._should_run('electrodes')
+        run_bi_electrodes = self._should_run('bi-electrodes')
 
-        print(f"DEBUG: run_electrodes={run_electrodes} "
+        print(f"DEBUG: run_electrodes={run_electrodes} run_bi_electrodes={run_bi_electrodes} "
               f"run_mono_eeg={run_mono_eeg} run_bi_eeg={run_bi_eeg} "
               f"run_mono_channels={run_mono_channels} run_bi_channels={run_bi_channels}")
 
@@ -1341,7 +1468,7 @@ class intracranial_BIDS_converter:
 
         needs_eeg_meta = run_mono_eeg or run_bi_eeg or run_mono_channels or run_bi_channels
         needs_contacts = run_electrodes or run_mono_eeg or run_mono_channels
-        needs_pairs = run_bi_eeg or run_bi_channels
+        needs_pairs = run_bi_eeg or run_bi_channels or run_bi_electrodes
 
         if needs_eeg_meta:
             self.sfreq, self.recording_duration = self.eeg_metadata()
@@ -1405,7 +1532,28 @@ class intracranial_BIDS_converter:
                     self._mark_stage('bi-eeg', 'failed', e)
                 if run_bi_channels:
                     self._mark_stage('bi-channels', 'failed', e)
-                run_bi_channels = run_bi_eeg = False
+                if run_bi_electrodes:
+                    self._mark_stage('bi-electrodes', 'failed', e)
+                run_bi_channels = run_bi_eeg = run_bi_electrodes = False
+
+        # ---------- Bipolar electrodes (deprecated, non-BIDS localization) ----------
+        if run_bi_electrodes:
+            try:
+                available = self._available_cml_spaces('pairs')
+                if not available:
+                    print(f"WARNING: no known CML coordinate spaces found for bipolar pairs of {self.subject}")
+                for cml_space in available:
+                    bids_space = CML_TO_BIDS_SPACE[cml_space]
+                    print(f"WRITING: bipolar electrodes (cml={cml_space}, space={bids_space}) for {self.subject}/{self.experiment}/ses-{self.session}")
+                    electrodes = self.pairs_to_bipolar_electrodes(cml_space)
+                    sidecar = self.make_bipolar_electrodes_sidecar(cml_space)
+                    self.write_BIDS_bipolar_electrodes(cml_space, electrodes, sidecar)
+                self._mark_stage('bi-electrodes', 'ok')
+            except Exception as e:
+                self._mark_stage('bi-electrodes', 'failed', e)
+                print(f"WARNING: bipolar electrodes failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
+        elif self.stage_outcomes.get('bi-electrodes') == 'not_run':
+            self._mark_stage('bi-electrodes', 'skipped')
 
         # bi-eeg runs first so its auto-generated channels.tsv is in place
         # when write_BIDS_channels overwrites it (or so the file exists

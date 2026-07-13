@@ -72,7 +72,7 @@ def lookup_conversion_params(conversion_df: pd.DataFrame, subject: str, experime
     return float(r0["system_version"]), float(r0["conversion_to_V"])
 
 
-STAGES = ('behavioral', 'electrodes', 'mono-eeg', 'bi-eeg', 'mono-channels', 'bi-channels')
+STAGES = ('behavioral', 'electrodes', 'bi-electrodes', 'mono-eeg', 'bi-eeg', 'mono-channels', 'bi-channels')
 
 
 def parse_sessions(spec_list: list[str], available_sessions: list[int]) -> list[int]:
