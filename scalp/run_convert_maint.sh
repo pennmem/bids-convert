@@ -31,7 +31,16 @@ fi
 
 echo "Active experiments: ${EXPERIMENTS[*]}"
 
-# For each active experiment, check for recently_modified.json
+# For each active experiment, convert all of its recently-modified sessions in
+# ONE invocation. The Python driver reads recently_modified.json (via
+# --recently-modified), filters its job list to exactly those (subject, session)
+# pairs, and fans them out across a single Slurm+Dask cluster. Calling it once
+# per session (the old behavior) spun up and tore down a whole cluster per
+# session — sequential wall-clock with zero parallel benefit.
+#
+# NOTE on --root: the driver appends "/<experiment>/" to --root itself, so we
+# pass the BASE ($OUTPUT_ROOT_BASE). Passing "$OUTPUT_ROOT_BASE/$EXP" here made
+# outputs land in the double-nested "$OUTPUT_ROOT_BASE/$EXP/$EXP/".
 for EXP in "${EXPERIMENTS[@]}"; do
     RECENT_FILE="$SCALP_DATA_ROOT/$EXP/recently_modified.json"
 
@@ -41,24 +50,12 @@ for EXP in "${EXPERIMENTS[@]}"; do
     fi
 
     echo "Processing $EXP from $RECENT_FILE"
-
-    # Parse JSON: extract each subject and its sessions, then call the python script per session
-    python3 -c "
-import json, sys
-with open('$RECENT_FILE') as f:
-    data = json.load(f)
-for subj, sessions in data.items():
-    for ses in sessions:
-        print(f'{subj} {ses}')
-" | while read -r SUBJECT SESSION; do
-        echo "  -> $EXP / $SUBJECT / session $SESSION / output root $OUTPUT_ROOT_BASE/$EXP"
-        $PYTHON_EXEC $PYTHON_SCRIPT \
-            --experiments "$EXP" \
-            --subject "$SUBJECT" \
-            --session "$SESSION" \
-            --root "$OUTPUT_ROOT_BASE/$EXP" \
-            "$@" || echo "  ✗ FAILED: $SUBJECT $EXP $SESSION"
-    done
+    echo "  -> $EXP (all recently-modified sessions) / output root $OUTPUT_ROOT_BASE/$EXP"
+    $PYTHON_EXEC $PYTHON_SCRIPT \
+        --experiments "$EXP" \
+        --recently-modified "$RECENT_FILE" \
+        --root "$OUTPUT_ROOT_BASE" \
+        "$@" || echo "  ✗ FAILED: $EXP"
 done
 
 echo "-----------------------------------"

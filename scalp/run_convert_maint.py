@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import argparse
+import json
 import os
 import sys
 import cmlreaders as cml
@@ -210,6 +211,16 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--recently-modified",
+        type=str,
+        default=None,
+        help="Path to a recently_modified.json ({subject: [sessions]}). "
+             "Restricts jobs to exactly these (subject, session) pairs, so a "
+             "single invocation can convert them all in one parallel cluster "
+             "instead of one process per session.",
+    )
+
+    parser.add_argument(
         "--exclude-subjects",
         nargs="+",
         default=["LTP001", "LTP9000", "LTP9001"],
@@ -365,6 +376,29 @@ if __name__ == "__main__":
         df_jobs = df_jobs[df_jobs["subject"] == args.subject]
     if args.session is not None:
         df_jobs = df_jobs[df_jobs["session"] == args.session]
+
+    # Restrict to the exact (subject, session) pairs listed in a
+    # recently_modified.json. This lets a single invocation convert every
+    # recently-modified session in one Dask cluster (see run_convert_maint.sh),
+    # rather than launching one process — and one cluster — per session.
+    if args.recently_modified is not None:
+        with open(args.recently_modified) as _f:
+            _recent = json.load(_f)
+        recent_pairs = {
+            (str(subj), int(ses))
+            for subj, sess_list in _recent.items()
+            for ses in (sess_list if isinstance(sess_list, (list, tuple)) else [sess_list])
+        }
+        df_jobs = df_jobs[
+            df_jobs.apply(
+                lambda r: (str(r["subject"]), int(r["session"])) in recent_pairs,
+                axis=1,
+            )
+        ].copy()
+        print(
+            f"Filtered to {len(df_jobs)} job(s) from "
+            f"{args.recently_modified} ({len(recent_pairs)} pair(s) listed)."
+        )
 
     # One error log per (per-experiment) root.
     error_logs: dict[str, ConversionErrorLog] = {}
