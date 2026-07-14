@@ -138,10 +138,10 @@ class intracranial_BIDS_converter:
                     return True
             return False
         if stage == 'bi-electrodes':
-            # At least one space-*_acq-bipolar_electrodes.tsv + matching .json.
+            # At least one acq-bipolar_space-*_electrodes.tsv + matching .json.
             if not os.path.isdir(ieeg_dir):
                 return False
-            tsvs = glob(os.path.join(ieeg_dir, f'{prefix}_space-*_acq-bipolar_electrodes.tsv'))
+            tsvs = glob(os.path.join(ieeg_dir, f'{prefix}_acq-bipolar_space-*_electrodes.tsv'))
             for tsv in tsvs:
                 base = tsv[:-len('_electrodes.tsv')]
                 if os.path.exists(base + '_electrodes.json'):
@@ -632,7 +632,7 @@ class intracranial_BIDS_converter:
         }
 
     def _space_file(self, cml_space, suffix, extension, acq=None):
-        """Build `sub-X_ses-Y_task-Z_space-<label>[_desc-<variant>][_acq-<acq>]_<suffix>.<ext>`
+        """Build `sub-X_ses-Y_task-Z[_acq-<acq>]_space-<label>[_desc-<variant>]_<suffix>.<ext>`
         directly, bypassing mne_bids.BIDSPath validation (which doesn't
         accept the `desc-` entity for electrodes/coordsystem files).
 
@@ -643,16 +643,22 @@ class intracranial_BIDS_converter:
         `acq` (e.g. 'bipolar') encodes an acquisition entity — used for the
         deprecated bipolar electrodes files. It is not a schema-valid entity
         on electrodes files, so callers must `.bidsignore` those paths.
+
+        Entities must follow BIDS canonical order (acq < space < desc);
+        emitting `acq` after `space` produces a filename that mne_bids's
+        read_raw_bids refuses to parse ("Entities in filename not ordered
+        correctly").
         """
         bids_space = CML_TO_BIDS_SPACE[cml_space]
         desc = CML_TO_BIDS_DESC.get(cml_space)
         ieeg_dir = self._session_dir('ieeg')
         os.makedirs(ieeg_dir, exist_ok=True)
-        parts = [self._bids_prefix(), f'space-{bids_space}']
-        if desc:
-            parts.append(f'desc-{desc}')
+        parts = [self._bids_prefix()]
         if acq:
             parts.append(f'acq-{acq}')
+        parts.append(f'space-{bids_space}')
+        if desc:
+            parts.append(f'desc-{desc}')
         parts.append(suffix)
         fname = '_'.join(parts) + extension
         return os.path.join(ieeg_dir, fname)
@@ -786,9 +792,10 @@ class intracranial_BIDS_converter:
         with open(self._space_file(cml_space, 'electrodes', '.json', acq='bipolar'), 'w') as f:
             json.dump(fp=f, obj=sidecar)
         # acq-bipolar is not a schema-valid entity on electrodes files, so
-        # the bids-validator must skip these deprecated files.
-        self._ensure_bidsignore_pattern('**/*_acq-bipolar_electrodes.tsv')
-        self._ensure_bidsignore_pattern('**/*_acq-bipolar_electrodes.json')
+        # the bids-validator must skip these deprecated files. acq now precedes
+        # space/desc (BIDS entity order), so match acq-bipolar anywhere in name.
+        self._ensure_bidsignore_pattern('**/*_acq-bipolar_*_electrodes.tsv')
+        self._ensure_bidsignore_pattern('**/*_acq-bipolar_*_electrodes.json')
         self._ensure_bidsignore_for_space(cml_space)
 
     # ---------- Channels ----------
