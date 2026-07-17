@@ -287,6 +287,39 @@ def _container_filetype(container: str) -> int:
     raise ValueError(f"unknown container {container!r}")
 
 
+def _record_duration_for_sfreq(sfreq: float):
+    """Data record duration (s) that yields an integer number of samples per
+    record for a non-integer ``sfreq``; ``None`` for integer rates.
+
+    EDF/BDF store the sampling frequency implicitly as ``samples_per_record /
+    record_duration``, so ``samples_per_record`` must be an integer. pyedflib's
+    default logic only searches *integer* record durations in ``range(1, 60)``
+    and raises ``AssertionError`` for rates like 499.7071 Hz where no integer
+    duration gives a whole number of samples. Setting an explicit non-integer
+    record duration via ``EdfWriter.setDatarecordDuration`` (the documented
+    escape hatch) sidesteps that — this is exactly how the archived converter
+    encoded these recordings (e.g. datarecord_duration=6.69792 s).
+
+    A multi-second record is used so the rate stored in EDF's 8-char duration
+    field keeps good precision, while staying well under pyedflib's 60 s cap to
+    bound trailing zero-padding of the final (partial) record.
+    """
+    if float(sfreq).is_integer():
+        return None
+    TARGET_SECONDS = 6  # ~archive scale; keeps record_duration in (0.001, 60]
+    samples_per_record = int(round(sfreq * TARGET_SECONDS))
+    if samples_per_record < 1:
+        # Pathologically low rate: fall back to a single sample per record.
+        samples_per_record = 1
+    record_duration = samples_per_record / sfreq
+    if not (0.001 <= record_duration <= 60):
+        raise ValueError(
+            f"computed EDF record duration {record_duration}s for sfreq "
+            f"{sfreq} Hz is outside pyedflib's [0.001, 60] s range"
+        )
+    return record_duration
+
+
 def write_digital(
     path: str,
     labels: Sequence[str],
@@ -364,6 +397,14 @@ def write_digital(
         file_type=_container_filetype(container),
     )
     try:
+        # For non-integer sample rates, pin an explicit data record duration
+        # BEFORE setSignalHeaders. This sets _enforce_record_duration=True so
+        # pyedflib skips its integer-only record-duration search (which would
+        # otherwise AssertionError on rates like 499.7071 Hz). Must precede
+        # setSignalHeaders, which triggers that search.
+        record_duration = _record_duration_for_sfreq(sfreq)
+        if record_duration is not None:
+            writer.setDatarecordDuration(record_duration)
         writer.setSignalHeaders(headers)
         # writeSamples expects a list of 1-D arrays per channel (one per
         # signal); pyedflib will accept a 2-D array too in newer versions
