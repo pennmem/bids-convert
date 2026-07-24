@@ -22,6 +22,8 @@ bids-convert/
 │   ├── FR2/                 # Free Recall 2
 │   ├── catFR1/              # Categorized Free Recall 1
 │   ├── catFR2/              # Categorized Free Recall 2
+│   ├── IFR1/                # Free Recall 1, Elemem/System-4 implementation
+│   ├── ICatFR1/             # Categorized Free Recall 1, Elemem/System-4 implementation
 │   ├── RepFR1/              # Repeated Free Recall 1
 │   ├── PAL1/                # Paired Associates Learning 1
 │   ├── PAL2/                # Paired Associates Learning 2

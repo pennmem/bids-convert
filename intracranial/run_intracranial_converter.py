@@ -31,6 +31,8 @@ _EXPERIMENT_MODULES = {
     "catFR2":  ("intracranial.catFR2.catFR2_BIDS_converter",   "catFR2_BIDS_converter"),
     "FR1":     ("intracranial.FR1.FR1_BIDS_converter",         "FR1_BIDS_converter"),
     "FR2":     ("intracranial.FR2.FR2_BIDS_converter",         "FR2_BIDS_converter"),
+    "ICatFR1": ("intracranial.ICatFR1.ICatFR1_BIDS_converter", "ICatFR1_BIDS_converter"),
+    "IFR1":    ("intracranial.IFR1.IFR1_BIDS_converter",       "IFR1_BIDS_converter"),
     "PAL1":    ("intracranial.PAL1.PAL1_BIDS_converter",       "PAL1_BIDS_converter"),
     "PAL2":    ("intracranial.PAL2.PAL2_BIDS_converter",       "PAL2_BIDS_converter"),
     "pyFR":    ("intracranial.pyFR.pyFR_BIDS_converter",       "pyFR_BIDS_converter"),

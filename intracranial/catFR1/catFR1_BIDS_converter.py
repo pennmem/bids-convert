@@ -84,31 +84,29 @@ class catFR1_BIDS_converter(intracranial_BIDS_converter):
             else:
                 durations.append(row.duration)
 
+        # --- ensure durations matches events length ---
+        # This block and the return must stay OUTSIDE the loop above. When they
+        # were indented into it, the method returned on the first iteration with
+        # a length-1 `durations`, which the broadcast below then expanded to the
+        # first event's duration for every row — every catFR1 session written
+        # before this fix has a constant `duration` column.
+        n = len(events)
+        durations = np.asarray(durations)
 
-            # --- ensure durations matches events length ---
-            n = len(events)
+        # length-1 vector -> broadcast
+        if durations.shape[0] == 1:
+            durations = np.full(n, float(durations[0]))
 
-            # scalar -> broadcast
-            if np.isscalar(durations):
-                durations = np.full(n, float(durations))
-            else:
-                durations = np.asarray(durations)
+        # wrong length -> fail loudly with context
+        if len(durations) != n:
+            raise ValueError(
+                f"apply_event_durations: duration length mismatch for "
+                f"{self.subject} {self.experiment} ses-{self.session}: "
+                f"len(durations)={len(durations)} vs len(events)={n}"
+            )
 
-                # length-1 vector -> broadcast
-                if durations.shape[0] == 1:
-                    durations = np.full(n, float(durations[0]))
-
-            # wrong length -> fail loudly with context
-            if len(durations) != n:
-                raise ValueError(
-                    f"apply_event_durations: duration length mismatch for "
-                    f"{self.subject} {self.experiment} ses-{self.session}: "
-                    f"len(durations)={len(durations)} vs len(events)={n}"
-                )
-
-            events["duration"] = durations    # preserves column order
-            # events['duration'] = durations    # preserves column order
-            return events
+        events["duration"] = durations    # preserves column order
+        return events
     
     def make_events_descriptor(self):
         descriptions = {
