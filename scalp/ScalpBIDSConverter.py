@@ -49,9 +49,46 @@ class ScalpBIDSConverter:
         # ("LTP365", 23): "LTP365_session_23.bdf",  # + _23_2.bdf (1.3G)
         # ("LTP369", 20): "LTP369_session_20.bdf",  # + _20_2.bdf (2.6G)
         # ("LTP386", 13): "LTP386_session_13.bdf",  # + _13_2.bdf (1.5G)
+        # ---- CourierReinstate1: two real .bdf; confirm intended recording ----
+        # (LTP592/0 and LTP605/5 also hold a second .bdf, but those are
+        #  wrong-subject strays and locate_raw_file()'s prefix filter drops them.)
+        # ("LTP565", 4): "LTP565_session_4.bdf",      # 406M + _4_2.bdf (1.9G); split?
+        # ("LTP593", 2): "LTP593_session_2.bdf",      # 1.6G + "LTP593_session_2 (2).bdf" (1.1G)
+        # ("LTP601", 3): "LTP601_session_3.bdf",      # 1.9G + "LTP601_session_3 (2).bdf" (35K stub)
+        # ("LTP602", 3): "LTP602_session_3 (2).bdf",  # 1.5G + LTP602_session_3.bdf (29M)
     }
 
     event_column_dict = {
+        # Five columns present in every CourierReinstate1 session are omitted
+        # deliberately: they are NiCLS/pointing-task leftovers that carry no
+        # information here. Checked across all 203 sessions — 'classifier' is
+        # always 'X'; 'correctPointingDirection' and 'submittedPointingDirection'
+        # are always -999 (written as "n/a"); 'efr_mark' and 'finalrecalled'
+        # only ever take -999 or 0.
+        "CourierReinstate1": [
+            'eegfile',
+            'eogArtifact',
+            'experiment',
+            'intruded',
+            'intrusion',
+            'item',
+            'itemno',
+            'montage',
+            'msoffset',
+            'phase',
+            'presX',
+            'presZ',
+            'protocol',
+            'recalled',
+            'rectime',
+            'serialpos',
+            'session',
+            'store',
+            'storeX',
+            'storeZ',
+            'subject',
+            'trial',
+        ],
         "ltpFR": ['subject', 'experiment', 'session', 'trial', 'task', 'item_name', 'item_num', 'recog_resp', 'recog_conf', 
                   'resp', 'answer', 'test_x', 'test_y', 'test_z', 'color_r', 'color_g', 'color_b', 'case', 'font'],
         "ltpFR2": ['subject', 'experiment', 'session', 'trial', 'item_name', 'item_num',
@@ -566,6 +603,10 @@ class ScalpBIDSConverter:
             self.wordpool_file = f"/data/eeg/scalp/ltp/VCBehOnly/{self.subject_raw}/wordpool.txt"
         elif np.isin(self.experiment, ["VCFROP"]):
             self.wordpool_file = f"/data/eeg/scalp/ltp/VCFROP/{self.subject_raw}/wordpool.txt"
+        elif np.isin(self.experiment, ["CourierReinstate1"]):
+            # Courier delivers objects rather than words; the per-subject item
+            # pool is all_items.txt (companion all_stores.txt lists the stores).
+            self.wordpool_file = f"/data/eeg/scalp/ltp/CourierReinstate1/{self.subject_raw}/all_items.txt"
         else:
             raise Exception("Wordpool not known for this experiment.")
     
@@ -653,7 +694,13 @@ class ScalpBIDSConverter:
             "AVG_VALUE_RECALL": "Subject’s recalled estimate of the average value for the current list/delivery day (VCFROP).",
             "PRACTICE_AVG_VALUE_RECALL": "Subject’s recalled estimate of the average value for the current list/delivery day (in a practice list).",
             "FINAL_COMPENSATION": "Event marking display and computation of final monetary compensation.",
-            "EFR_MARK": "Externalized free recall: participants say the items the remember outloud."
+            "EFR_MARK": "Externalized free recall: participants say the items the remember outloud.",
+            # ---------------- CourierReinstate1-specific trial types ----------------
+            "REINSTATEMENT": "Object reinstatement: the store where a previously delivered item was "
+                             "presented comes into view while the courier navigates to the next "
+                             "delivery. Logged repeatedly (~6 Hz) for as long as the store is in "
+                             "view; the 'item' column names the previously delivered item seen.",
+            "MUSIC_VIDEOS_STOP": "End of the music-video filler block presented between trials.",
         }
         HED = {
             "onset": {
@@ -877,7 +924,7 @@ class ScalpBIDSConverter:
             },
             "experiment": {
                 "LongName": "Experiment name",
-                "Description": "Name of the experiment/task this session belongs to (e.g. 'VCFROP', 'ValueCourier').",
+                "Description": "Name of the experiment/task this session belongs to (e.g. 'VCFROP', 'ValueCourier', 'CourierReinstate1').",
             },
             "phase": {
                 "LongName": "Task phase",

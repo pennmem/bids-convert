@@ -1136,10 +1136,13 @@ class intracranial_BIDS_converter:
             container=container,
             data_for_fallback=data_int,
         )
-        if units_status == "derived":
+        # "derived" (nothing trusted) or "source_edf+derived" (only some
+        # channels had a usable source header) — both worth flagging.
+        if "derived" in units_status:
             print(
                 f"  WARN: derived units from data for {self.subject} "
-                f"{self.experiment} ses-{self.session} ({ref})"
+                f"{self.experiment} ses-{self.session} ({ref}) "
+                f"[{units_status}]"
             )
 
         write_digital(

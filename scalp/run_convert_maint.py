@@ -192,7 +192,8 @@ def parse_args():
     parser.add_argument(
         "--experiments",
         nargs="+",
-        default=["ValueCourier", "ltpFR", "ltpFR2", "VFFR", "VCBehOnly"],
+        default=["ValueCourier", "ltpFR", "ltpFR2", "VFFR", "VCBehOnly",
+                 "CourierReinstate1"],
         help="Experiments to run (default: predefined list)",
     )
     

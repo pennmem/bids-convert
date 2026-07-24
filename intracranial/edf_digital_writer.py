@@ -9,7 +9,7 @@ factor implied by the ``physical_dimension`` string ("uV"→1e-6,
 "nV"→1e-9), recovering Volts losslessly.
 
 The companion ``resolve_edf_units`` helper picks per-channel pmin/pmax/dim
-via this priority cascade:
+via this priority cascade, evaluated independently for each channel:
 
   1. Real values from the source recording's EDF header (if it is an EDF
      and the values are not the placeholder 0..1 sentinel).
@@ -219,44 +219,68 @@ def resolve_edf_units(
 ) -> Tuple[Dict[str, Tuple[float, float, int, int, str]], str]:
     """Return per-channel ``(pmin, pmax, dmin, dmax, dim)`` and a status note.
 
-    Priority cascade:
-      1. Source EDF header (per channel — only if not a placeholder).
+    Priority cascade, applied **per channel** — a channel whose source
+    header can be trusted keeps it even when a sibling channel's cannot:
+      1. Source EDF header (only if not a placeholder).
       2. ``conversion_to_V`` from system_1_unit_conversions.csv.
       3. Data-derived: gain=1.0 µV/LSB and the actual sample range.
 
-    The status string is one of ``"source_edf"``, ``"csv"``, or
-    ``"derived"`` and should be propagated to ``df_status`` so a human
-    can audit sessions that fell through to derived units.
+    Resolving per channel matters because a single untrusted channel is
+    common and benign: BioSemi scalp BDFs carry a ``Status`` trigger
+    channel whose physical dimension is ``"Boolean"``, which
+    :func:`is_placeholder_units` rejects. Under the previous
+    all-or-nothing rule that lone channel discarded the real µV
+    calibration of every EEG channel in the file, silently rewriting a
+    1/32 µV-per-LSB recording as 1 µV-per-LSB (physical values 32× too
+    large; the digital samples were unaffected).
+
+    The status string reports which branches were used: ``"source_edf"``,
+    ``"csv"`` or ``"derived"`` when one branch covered every channel, and
+    ``"source_edf+csv"`` / ``"source_edf+derived"`` when the source header
+    covered only some. Propagate it to ``df_status`` so a human can audit
+    sessions that fell through. Note that ``== "derived"`` still means
+    "nothing was trusted"; use ``"derived" in status`` to catch partial
+    fallback too.
     """
     src = read_source_edf_units(source_edf_path) if source_edf_path else None
 
     # ---- Step 1: source EDF header ------------------------------------
+    resolved: Dict[str, Tuple[float, float, int, int, str]] = {}
     if src is not None:
-        usable: Dict[str, Tuple[float, float, int, int, str]] = {}
         for label in channel_labels:
             if label in src:
                 pmin, pmax, dmin, dmax, dim = src[label]
                 if not is_placeholder_units(pmin, pmax, dim):
-                    usable[label] = (pmin, pmax, dmin, dmax, dim)
-        if len(usable) == len(channel_labels):
-            return usable, "source_edf"
+                    resolved[label] = (pmin, pmax, dmin, dmax, dim)
 
-    # ---- Step 2: CSV inference ----------------------------------------
+    remaining = [label for label in channel_labels if label not in resolved]
+    if not remaining:
+        return resolved, "source_edf"
+    prefix = "source_edf+" if resolved else ""
+
+    # ---- Step 2: CSV inference (remaining channels only) --------------
     if conversion_to_V is not None:
         try:
             gain, dim = infer_units_from_csv(conversion_to_V)
             pmin, pmax, dmin, dmax = units_for_container(gain, dim, container)
-            return (
-                {label: (pmin, pmax, dmin, dmax, dim) for label in channel_labels},
-                "csv",
-            )
+            for label in remaining:
+                resolved[label] = (pmin, pmax, dmin, dmax, dim)
+            return resolved, prefix + "csv"
         except ValueError:
             pass  # fall through
 
-    # ---- Step 3: data-derived fallback --------------------------------
-    if data_for_fallback is not None:
-        observed_min = int(np.min(data_for_fallback))
-        observed_max = int(np.max(data_for_fallback))
+    # ---- Step 3: data-derived fallback (remaining channels only) ------
+    # The observed range is taken over just the channels being derived —
+    # rows of ``data_for_fallback`` are assumed to line up with
+    # ``channel_labels``. When every channel falls through, this is the
+    # whole array, matching the historical behavior exactly.
+    fallback = data_for_fallback
+    if fallback is not None and len(fallback) == len(channel_labels):
+        rows = [i for i, label in enumerate(channel_labels) if label not in resolved]
+        fallback = fallback[rows]
+    if fallback is not None and fallback.size:
+        observed_min = int(np.min(fallback))
+        observed_max = int(np.max(fallback))
     else:
         observed_min, observed_max = -32768, 32767
     cmin, cmax = _CONTAINER_RANGES[container]
@@ -269,10 +293,9 @@ def resolve_edf_units(
     gain = 1.0  # safe default: 1 µV/LSB
     pmin = float(dmin) * gain
     pmax = float(dmax) * gain
-    return (
-        {label: (pmin, pmax, dmin, dmax, "uV") for label in channel_labels},
-        "derived",
-    )
+    for label in remaining:
+        resolved[label] = (pmin, pmax, dmin, dmax, "uV")
+    return resolved, prefix + "derived"
 
 
 # ----------------------------------------------------------------------
