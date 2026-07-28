@@ -90,17 +90,27 @@ def convert_one_job(subject, experiment, session, *, root, overrides, force, job
 
     report = converter.stage_report()
     first_exc = report["exception"] or exc
+    failed = report["any_failure"] or exc is not None
+    error_stage = report["error_stage"] or ("run" if exc is not None else "")
+
+    if failed:
+        detail = f"{type(first_exc).__name__}: {first_exc}" if first_exc is not None else "see log"
+        detail = " ".join(str(detail).splitlines()).strip()
+        message = (f"FAILED at '{error_stage}': {subject} {experiment} {session} — {detail}")
+    else:
+        message = f"DONE: {subject} {experiment} {session}"
+
     return _result(
         "ran", subject, experiment, session, root,
         files_written=report["files_written"],
         files_not_written=report["files_not_written"],
-        any_failure=report["any_failure"] or exc is not None,
+        any_failure=failed,
         raised=exc is not None,
-        error_stage=report["error_stage"] or ("run" if exc is not None else ""),
+        error_stage=error_stage,
         error_type=type(first_exc).__name__ if first_exc is not None else "",
         error_message=" ".join(str(first_exc).splitlines()).strip() if first_exc is not None else "",
         cmlreader_failure=cmlreader_involved(first_exc) if first_exc is not None else False,
-        message=f"DONE: {subject} {experiment} {session}",
+        message=message,
     )
 
 

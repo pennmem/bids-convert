@@ -28,6 +28,12 @@ from edf_digital_writer import (  # noqa: E402
 )
 from cli.stages import EEG_BIDS_CITATION, StageGatedConverter  # noqa: E402
 
+# Montage cap files ship next to this module. Anchor on __file__ rather than
+# the cwd — the entry point lives at the repo root, not in scalp/.
+_SCALP_DIR = os.path.dirname(os.path.abspath(__file__))
+MONTAGE_DIR = os.path.join(_SCALP_DIR, "montage_files")
+
+
 class UnknownElectrodeCapError(Exception):
     pass
 class MultiplePathsError(FileExistsError):
@@ -497,7 +503,8 @@ class ScalpBIDSConverter(StageGatedConverter):
             if "sync" in self.raw_file.ch_names:
                 # GSN 200 v2.1 caps
                 self.eeg_sidecar["CapManufacturersModelName"] = "Geodisic Sensor Net 200 v2.1"
-                mon = mne.channels.read_custom_montage("montage_files/egi128_GSN_200.sfp")
+                mon = mne.channels.read_custom_montage(
+                    os.path.join(MONTAGE_DIR, "egi128_GSN_200.sfp"))
                 self.raw_file.set_montage(mon, on_missing="warn")
                 self.raw_file.set_channel_types({'E8': 'eog', 'E26': 'eog', 'E126': 'eog', 
                                             'E127': 'eog'})
@@ -507,7 +514,8 @@ class ScalpBIDSConverter(StageGatedConverter):
 #             elif "DI15" in self.raw_file.ch_names:
                 # GSN HydroCel caps
                 self.eeg_sidecar["CapManufacturersModelName"] = "HydroCel Geodisic Sensor Net"
-                mon = mne.channels.read_custom_montage("montage_files/egi128_GSN_HydroCel.sfp")
+                mon = mne.channels.read_custom_montage(
+                    os.path.join(MONTAGE_DIR, "egi128_GSN_HydroCel.sfp"))
                 self.raw_file.set_montage(mon, on_missing="warn")
                 self.raw_file.set_channel_types({'E8': 'eog', 'E25': 'eog', 'E126': 'eog',
                            'E127': 'eog'})
