@@ -9,6 +9,7 @@ from glob import glob
 import mne_bids
 
 from .edf_digital_writer import resolve_edf_units, write_digital
+from cli.stages import IEEG_BIDS_CITATION, StageGatedConverter
 
 
 # CML atlas/space key -> BIDS-standard space name.
@@ -69,7 +70,10 @@ assert {k for k, v in CML_TO_BIDS_SPACE.items() if v == 'Other'} == \
 )
 
 
-class intracranial_BIDS_converter:
+class intracranial_BIDS_converter(StageGatedConverter):
+    MODALITY_LABEL = 'intracranial EEG'
+    MODALITY_CITATION = IEEG_BIDS_CITATION
+
     ELEC_TYPES_DESCRIPTION = {'S': 'strip', 'G': 'grid', 'D': 'depth', 'uD': 'micro'}
     ELEC_TYPES_BIDS = {'S': 'ECOG', 'G': 'ECOG', 'D': 'SEEG', 'uD': 'SEEG'}
     BRAIN_REGIONS = ['wb.region', 'ind.region', 'das.region', 'stein.region']
@@ -159,12 +163,6 @@ class intracranial_BIDS_converter:
             return json_ok and data_ok
         raise ValueError(f"unknown stage: {stage!r}")
 
-    def _should_run(self, stage):
-        if self.overrides.get(stage, False):
-            return True
-        return not self._stage_outputs_exist(stage)
-    
-        
     def _discover_montages(self, localization):
         """Montage numbers that have an on-disk localization directory for
         ``localization``, sorted descending (closest re-montage first)."""
@@ -1169,33 +1167,6 @@ class intracranial_BIDS_converter:
         with open(bids_path.update(extension=".json").fpath, "w") as f:
             json.dump(fp=f, obj=self.events_descriptor)
 
-    def _update_scans_tsv(self, ieeg_file_path):
-        """Append a row for the new iEEG file to ``scans.tsv``.
-
-        BIDS spec: ``scans.tsv`` lists every recording in the session
-        with a path relative to the session directory. We append rather
-        than overwrite so multiple acquisitions in the same session
-        coexist.
-        """
-        scans_tsv = mne_bids.BIDSPath(
-            subject=self.subject,
-            session=str(self.session),
-            suffix="scans",
-            extension=".tsv",
-            root=self.root,
-        ).fpath
-        # Path relative to the session directory.
-        rel_path = os.path.relpath(ieeg_file_path, scans_tsv.parent)
-        new_row = pd.DataFrame([{"filename": rel_path}])
-        if scans_tsv.exists():
-            existing = pd.read_csv(scans_tsv, sep="\t")
-            existing = existing[existing["filename"] != rel_path]
-            combined = pd.concat([existing, new_row], ignore_index=True)
-        else:
-            os.makedirs(scans_tsv.parent, exist_ok=True)
-            combined = new_row
-        combined.to_csv(scans_tsv, sep="\t", index=False)
-
     # ---------- EEG (monopolar) ----------
     def eeg_mono_to_BIDS(self):
         """Load monopolar digital ints via cmlreaders. No MNE, no Volts.
@@ -1385,80 +1356,12 @@ class intracranial_BIDS_converter:
     # stage report (used by ConversionErrorLog)
     # Stage outcomes are recorded during run() so the orchestrator can
     # produce a per-job failure row. Values: 'ok', 'skipped' (outputs already
-    # exist), 'failed' (stage raised but run() continued), or 'not_run'
-    # (skipped because an upstream stage failed). Exception info is kept
-    # for the first stage that raised.
+    # exist), 'failed', or 'not_run' (never reached). The bookkeeping itself
+    # lives in cli.stages.StageGatedConverter.
     ALL_STAGES = ('behavioral', 'electrodes', 'bi-electrodes', 'bi-eeg', 'bi-channels', 'mono-eeg', 'mono-channels')
-
-    def stage_report(self):
-        # Outcomes: 'ok' (wrote), 'skipped' (already on disk), 'failed', 'not_run'.
-        # On-disk files = ok + skipped; missing = failed + not_run.
-        # Only 'failed' flags the job as a failure — not_run just means the
-        # stage wasn't requested this run.
-        outcomes = getattr(self, 'stage_outcomes', {})
-        written = [s for s in self.ALL_STAGES if outcomes.get(s) in ('ok', 'skipped')]
-        not_written = [s for s in self.ALL_STAGES if outcomes.get(s) in ('failed', 'not_run', None)]
-        any_failure = any(outcomes.get(s) == 'failed' for s in self.ALL_STAGES)
-        return {
-            'files_written': written,
-            'files_not_written': not_written,
-            'any_failure': any_failure,
-            'error_stage': getattr(self, 'first_error_stage', None),
-            'exception': getattr(self, 'first_exception', None),
-        }
-
-    def _mark_stage(self, stage, outcome, exc=None):
-        if not hasattr(self, 'stage_outcomes'):
-            self.stage_outcomes = {}
-        self.stage_outcomes[stage] = outcome
-        if outcome == 'failed' and exc is not None and not hasattr(self, 'first_exception'):
-            self.first_exception = exc
-            self.first_error_stage = stage
 
     # ----------------------------------------
     # run conversion
-    def _ensure_dataset_description(self):
-        """Write a minimal BIDS-compliant dataset_description.json at the
-        BIDS root if one isn't already there. Idempotent — never overwrites
-        a customised version."""
-        path = os.path.join(self.root, 'dataset_description.json')
-        if os.path.exists(path):
-            return
-        os.makedirs(self.root, exist_ok=True)
-        body = {
-            "Name": f"{self.experiment} intracranial EEG (CML pennmem/bids-convert)",
-            "BIDSVersion": "1.10.0",
-            "DatasetType": "raw",
-            "Authors": ["[Unspecified]"],
-        }
-        with open(path, 'w') as f:
-            json.dump(body, f, indent=4)
-            f.write('\n')
-
-    def _ensure_readme(self):
-        """Write a minimal BIDS-compliant README at the BIDS root if missing.
-        Idempotent — never overwrites a customised README."""
-        path = os.path.join(self.root, 'README')
-        if os.path.exists(path):
-            return
-        os.makedirs(self.root, exist_ok=True)
-        with open(path, 'w') as f:
-            f.write(
-                "References\n"
-                "----------\n"
-                "Holdgraf, C., Appelhoff, S., Bickel, S., Bouchard, K., D'Ambrosio, S., "
-                "David, O., ... & Hermes, D. (2019). iEEG-BIDS, extending the Brain "
-                "Imaging Data Structure specification to human intracranial "
-                "electrophysiology. Scientific Data, 6(1), 102. "
-                "https://doi.org/10.1038/s41597-019-0105-7\n\n"
-                "Appelhoff, S., Sanderson, M., Brooks, T., Vliet, M., Quentin, R., "
-                "Holdgraf, C., Chaumon, M., Mikulan, E., Tavabi, K., Höchenberger, R., "
-                "Welke, D., Brunner, C., Rockhill, A., Larson, E., Gramfort, A. and "
-                "Jas, M. (2019). MNE-BIDS: Organizing electrophysiological data into "
-                "the BIDS format and facilitating their analysis. Journal of Open "
-                "Source Software 4: (1896). https://doi.org/10.21105/joss.01896\n"
-            )
-
     def run(self):
         self.reader = self.cml_reader()
         self.stage_outcomes = {s: 'not_run' for s in self.ALL_STAGES}
@@ -1479,8 +1382,8 @@ class intracranial_BIDS_converter:
                 self.write_BIDS_beh()
                 self._mark_stage('behavioral', 'ok')
             except Exception as e:
-                self._mark_stage('behavioral', 'failed', e)
-                raise
+                self._report_stage_failure(['behavioral'], 'Behavioral conversion', e)
+                return
         else:
             self._mark_stage('behavioral', 'skipped')
             print(f"SKIP: behavioral outputs exist for {self.subject}/{self.experiment}/ses-{self.session}")
@@ -1534,14 +1437,12 @@ class intracranial_BIDS_converter:
                 self.contacts, self.contacts_dropped = self._filter_scheme_to_recording(self.contacts, "contacts")
                 contacts_loaded = True
             except Exception as e:
-                print(f"WARNING: contacts unavailable for {self.subject}/{self.experiment}/ses-{self.session} — skipping contact-dependent stages ({type(e).__name__}: {e})")
-                if run_electrodes:
-                    self._mark_stage('electrodes', 'failed', e)
-                if run_mono_eeg:
-                    self._mark_stage('mono-eeg', 'failed', e)
-                if run_mono_channels:
-                    self._mark_stage('mono-channels', 'failed', e)
+                # Every monopolar stage depends on contacts; fail them together.
+                failed = [s for s, wanted in (('electrodes', run_electrodes),
+                                              ('mono-eeg', run_mono_eeg),
+                                              ('mono-channels', run_mono_channels)) if wanted]
                 run_electrodes = run_mono_eeg = run_mono_channels = False
+                self._report_stage_failure(failed, 'Contacts load', e)
 
         # ---------- Electrodes ----------
         if run_electrodes:
@@ -1558,8 +1459,7 @@ class intracranial_BIDS_converter:
                     self.write_BIDS_coords(cml_space)
                 self._mark_stage('electrodes', 'ok')
             except Exception as e:
-                self._mark_stage('electrodes', 'failed', e)
-                print(f"WARNING: electrodes failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
+                self._report_stage_failure(['electrodes'], 'Electrodes write', e)
         else:
             self._mark_stage('electrodes', 'skipped')
             print(f"SKIP: electrodes outputs exist for {self.subject}/{self.experiment}/ses-{self.session}")
@@ -1571,14 +1471,12 @@ class intracranial_BIDS_converter:
                 self.pairs_all = self.pairs.copy()
                 self.pairs, self.pairs_dropped = self._filter_scheme_to_recording(self.pairs, "pairs")
             except Exception as e:
-                print(f"WARNING: bipolar pairs unavailable for {self.subject}/{self.experiment}/ses-{self.session} — skipping bipolar stages ({type(e).__name__}: {e})")
-                if run_bi_eeg:
-                    self._mark_stage('bi-eeg', 'failed', e)
-                if run_bi_channels:
-                    self._mark_stage('bi-channels', 'failed', e)
-                if run_bi_electrodes:
-                    self._mark_stage('bi-electrodes', 'failed', e)
+                # Every bipolar stage depends on pairs; fail them together.
+                failed = [s for s, wanted in (('bi-eeg', run_bi_eeg),
+                                              ('bi-channels', run_bi_channels),
+                                              ('bi-electrodes', run_bi_electrodes)) if wanted]
                 run_bi_channels = run_bi_eeg = run_bi_electrodes = False
+                self._report_stage_failure(failed, 'Bipolar pairs load', e)
 
         # ---------- Bipolar electrodes (deprecated, non-BIDS localization) ----------
         if run_bi_electrodes:
@@ -1594,8 +1492,7 @@ class intracranial_BIDS_converter:
                     self.write_BIDS_bipolar_electrodes(cml_space, electrodes, sidecar)
                 self._mark_stage('bi-electrodes', 'ok')
             except Exception as e:
-                self._mark_stage('bi-electrodes', 'failed', e)
-                print(f"WARNING: bipolar electrodes failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
+                self._report_stage_failure(['bi-electrodes'], 'Bipolar electrodes write', e)
         elif self.stage_outcomes.get('bi-electrodes') == 'not_run':
             self._mark_stage('bi-electrodes', 'skipped')
 
@@ -1610,8 +1507,7 @@ class intracranial_BIDS_converter:
                 self.write_BIDS_ieeg('bipolar')
                 self._mark_stage('bi-eeg', 'ok')
             except Exception as e:
-                self._mark_stage('bi-eeg', 'failed', e)
-                print(f"WARNING: bi-eeg failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
+                self._report_stage_failure(['bi-eeg'], 'Bipolar EEG conversion', e)
         elif self.stage_outcomes.get('bi-eeg') == 'not_run':
             self._mark_stage('bi-eeg', 'skipped')
 
@@ -1623,8 +1519,7 @@ class intracranial_BIDS_converter:
                 self.write_BIDS_channelmap('bipolar')
                 self._mark_stage('bi-channels', 'ok')
             except Exception as e:
-                self._mark_stage('bi-channels', 'failed', e)
-                print(f"WARNING: bi-channels failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
+                self._report_stage_failure(['bi-channels'], 'Bipolar channels write', e)
         elif self.stage_outcomes.get('bi-channels') == 'not_run':
             self._mark_stage('bi-channels', 'skipped')
 
@@ -1637,8 +1532,7 @@ class intracranial_BIDS_converter:
                 self.write_BIDS_ieeg('monopolar')
                 self._mark_stage('mono-eeg', 'ok')
             except Exception as e:
-                self._mark_stage('mono-eeg', 'failed', e)
-                print(f"WARNING: mono-eeg failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
+                self._report_stage_failure(['mono-eeg'], 'Monopolar EEG conversion', e)
         else:
             self._mark_stage('mono-eeg', 'skipped')
 
@@ -1649,8 +1543,7 @@ class intracranial_BIDS_converter:
                 self.write_BIDS_channels('monopolar')
                 self._mark_stage('mono-channels', 'ok')
             except Exception as e:
-                self._mark_stage('mono-channels', 'failed', e)
-                print(f"WARNING: mono-channels failed for {self.subject}/{self.experiment}/ses-{self.session} — skipping ({type(e).__name__}: {e})")
+                self._report_stage_failure(['mono-channels'], 'Monopolar channels write', e)
         else:
             self._mark_stage('mono-channels', 'skipped')
 

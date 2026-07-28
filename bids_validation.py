@@ -48,7 +48,10 @@ from eeg_validation import (
 from conversion_error_log import CSV_COLUMNS as ERROR_CSV_COLUMNS
 
 
-LOG_ROOT = "/data/BIDS-convert-logs"
+# The canonical log root is RAM_maint-owned, so users other than maint cannot
+# write to it. Override with BIDS_CONVERT_LOG_ROOT to run a conversion under
+# your own account (e.g. testing against a scratch BIDS root).
+LOG_ROOT = os.environ.get("BIDS_CONVERT_LOG_ROOT", "/data/BIDS-convert-logs")
 SECTION_RULE = "=" * 60
 
 # np.isclose tolerances baked into the comparators (kept here so we can

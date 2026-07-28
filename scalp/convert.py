@@ -6,34 +6,27 @@ import sys
 from ScalpBIDSConverter import *
 import argparse
 
-def convert_to_bids(subject, experiment, session):
-#     if os.path.exists(f"/data8/PEERS_BIDS/sub-{subject}/ses-{session}/eeg/sub-{subject}_ses-{session}_task-{experiment}_eeg.edf"):
-#         return True
-    converter = ScalpBIDSConverter(subject, experiment, session, root="/data8/PEERS_BIDS/", overwrite_eeg=True, overwrite_beh=True)
-    return True
-
-# if __name__=="__main__":
-#     index = int(sys.argv[1])
-#     data = pd.read_csv("/home1/jrudoler/bids-convert/peers_sessions.csv")
-#     convert_to_bids(**data.iloc[index].to_dict())
-
 def convert_to_bids(subject, experiment, session,
                     root="/data8/PEERS_BIDS/",
-                    overwrite_eeg=True,
-                    overwrite_beh=True,
+                    overwrite=False,
                     force=False):
     """
     Wrapper around ScalpBIDSConverter for a single session.
+
+    For anything beyond a one-off single session, use the repo entry point
+    (``bids_convert.py``), which handles job building, parallelism, error
+    logging and validation.
     """
+    overrides = {stage: bool(overwrite) for stage in ScalpBIDSConverter.ALL_STAGES}
     converter = ScalpBIDSConverter(
         subject=subject,
         experiment=experiment,
         session=session,
         root=root,
-        overwrite_eeg=overwrite_eeg,
-        overwrite_beh=overwrite_beh,
+        overrides=overrides,
         force=force,
     )
+    converter.run()
     return True
 
 
@@ -63,14 +56,9 @@ def parse_args(argv=None):
         help="Root BIDS directory (default: /data8/PEERS_BIDS/)."
     )
     parser.add_argument(
-        "--no-overwrite-eeg",
+        "--overwrite",
         action="store_true",
-        help="Do not overwrite existing EEG BIDS files."
-    )
-    parser.add_argument(
-        "--no-overwrite-beh",
-        action="store_true",
-        help="Do not overwrite existing behavioral BIDS files."
+        help="Re-convert every stage even if its outputs already exist."
     )
     parser.add_argument(
         "--force",
@@ -90,7 +78,6 @@ if __name__ == "__main__":
         experiment=args.experiment,
         session=args.session,
         root=args.root,
-        overwrite_eeg=not args.no_overwrite_eeg,
-        overwrite_beh=not args.no_overwrite_beh,
+        overwrite=args.overwrite,
         force=args.force,
     )

@@ -19,16 +19,21 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "intracranial")
 )
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The repo root, for the shared `cli` engine package.
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+)
 from edf_digital_writer import (  # noqa: E402
     write_digital, resolve_edf_units, encode_egi_to_bdf,
 )
+from cli.stages import EEG_BIDS_CITATION, StageGatedConverter  # noqa: E402
 
 class UnknownElectrodeCapError(Exception):
     pass
 class MultiplePathsError(FileExistsError):
     pass
 
-class ScalpBIDSConverter:
+class ScalpBIDSConverter(StageGatedConverter):
     # EGI output container: "bdf" (per-channel int24, see _write_eeg_from_egi)
     # or "brainvision" (IEEE float32 .vhdr/.eeg/.vmrk). Change here in code.
     egi_output_format = "brainvision"
@@ -225,77 +230,19 @@ class ScalpBIDSConverter:
 
     # Stage outcomes: 'ok' (wrote), 'skipped' (outputs exist and not
     # overridden), 'failed', 'not_run'. Files-on-disk = ok + skipped.
+    # Bookkeeping lives in cli.stages.StageGatedConverter.
     ALL_STAGES = ('behavioral', 'eeg', 'montage')
-
-    def stage_report(self):
-        outcomes = getattr(self, 'stage_outcomes', {})
-        written = [s for s in self.ALL_STAGES if outcomes.get(s) in ('ok', 'skipped')]
-        not_written = [s for s in self.ALL_STAGES if outcomes.get(s) in ('failed', 'not_run', None)]
-        any_failure = any(outcomes.get(s) == 'failed' for s in self.ALL_STAGES)
-        return {
-            'files_written': written,
-            'files_not_written': not_written,
-            'any_failure': any_failure,
-            'error_stage': getattr(self, 'first_error_stage', None),
-            'exception': getattr(self, 'first_exception', None),
-        }
-
-    def _mark_stage(self, stage, outcome, exc=None):
-        if not hasattr(self, 'stage_outcomes'):
-            self.stage_outcomes = {}
-        self.stage_outcomes[stage] = outcome
-        if outcome == 'failed' and exc is not None and not hasattr(self, 'first_exception'):
-            self.first_exception = exc
-            self.first_error_stage = stage
-
-    def _ensure_dataset_description(self):
-        """Write a minimal BIDS-compliant dataset_description.json at the
-        BIDS root if one isn't already there. Idempotent — never overwrites
-        a customised version."""
-        path = os.path.join(self.root, 'dataset_description.json')
-        if os.path.exists(path):
-            return
-        os.makedirs(self.root, exist_ok=True)
-        body = {
-            "Name": f"{self.experiment} scalp EEG (CML pennmem/bids-convert)",
-            "BIDSVersion": "1.10.0",
-            "DatasetType": "raw",
-            "Authors": ["[Unspecified]"],
-        }
-        with open(path, 'w') as f:
-            json.dump(body, f, indent=4)
-            f.write('\n')
-
-    def _ensure_readme(self):
-        """Write a minimal BIDS-compliant README at the BIDS root if missing.
-        Idempotent — never overwrites a customised README."""
-        path = os.path.join(self.root, 'README')
-        if os.path.exists(path):
-            return
-        os.makedirs(self.root, exist_ok=True)
-        with open(path, 'w') as f:
-            f.write(
-                "References\n"
-                "----------\n"
-                "Pernet, C. R., Appelhoff, S., Gorgolewski, K. J., Flandin, G., "
-                "Phillips, C., Delorme, A., Oostenveld, R. (2019). EEG-BIDS, "
-                "an extension to the brain imaging data structure for "
-                "electroencephalography. Scientific Data, 6, 103. "
-                "https://doi.org/10.1038/s41597-019-0104-8\n\n"
-                "Appelhoff, S., Sanderson, M., Brooks, T., Vliet, M., Quentin, R., "
-                "Holdgraf, C., Chaumon, M., Mikulan, E., Tavabi, K., Höchenberger, R., "
-                "Welke, D., Brunner, C., Rockhill, A., Larson, E., Gramfort, A. and "
-                "Jas, M. (2019). MNE-BIDS: Organizing electrophysiological data into "
-                "the BIDS format and facilitating their analysis. Journal of Open "
-                "Source Software 4: (1896). https://doi.org/10.21105/joss.01896\n"
-            )
+    MODALITY_LABEL = 'scalp EEG'
+    MODALITY_CITATION = EEG_BIDS_CITATION
 
     def __init__(self, subject, experiment, session, root="/scratch/PEERS_BIDS/",
-                 overwrite_eeg=True, overwrite_beh=True, overrides=None,
-                 force=False):
-        # force=False (default): any stage failure raises, aborting the run.
-        # force=True: failures are logged as warnings and the run continues,
-        #             matching the old best-effort behavior.
+                 overrides=None, force=False):
+        """Set up the conversion. Deliberately cheap and I/O-free — call
+        ``run()`` to actually convert.
+
+        force=False (default): any stage failure raises, aborting the run.
+        force=True: failures are logged as warnings and the run continues.
+        """
         self.force = force
         self.root = root
         # The on-disk / CMLReader subject label may contain characters
@@ -309,6 +256,11 @@ class ScalpBIDSConverter:
         self.overrides = overrides or {}
         self.stage_outcomes = {s: 'not_run' for s in self.ALL_STAGES}
 
+    def run(self):
+        """Convert this session. Each stage runs only when ``_should_run``
+        says so — i.e. its outputs are missing, or --overwrite named it."""
+        self.stage_outcomes = {s: 'not_run' for s in self.ALL_STAGES}
+
         # Root-level required/recommended BIDS files. Idempotent — won't
         # overwrite a customised dataset_description.json or README.
         self._ensure_dataset_description()
@@ -319,22 +271,19 @@ class ScalpBIDSConverter:
 
         # ---------- Behavioral ----------
         # When _should_run picks a stage (because outputs are missing OR
-        # --override-<stage> was passed), overwrite is the natural
-        # consequence; the legacy --overwrite-* flags only matter when a
-        # stage runs without override and partial outputs exist.
-        eeg_overwrite = overwrite_eeg or bool(self.overrides.get('eeg'))
-        beh_overwrite = overwrite_beh or bool(self.overrides.get('behavioral'))
-
+        # --overwrite named it), rewriting its files is the whole point, so
+        # the writers always run with overwrite=True.
         if self._should_run('behavioral'):
             try:
                 self.events = self.load_events(beh_only=True)
             except FileNotFoundError as exc:
                 self._mark_stage('behavioral', 'failed', exc)
-                print(f"[SKIP] No events found for {subject}, {experiment}, session {session}: {exc}")
+                print(f"[SKIP] No events found for {self.subject}, {self.experiment}, "
+                      f"session {self.session}: {exc}")
                 return
             try:
                 self.make_event_descriptors()
-                self.write_bids_beh(overwrite=beh_overwrite)
+                self.write_bids_beh(overwrite=True)
                 self._mark_stage('behavioral', 'ok')
             except Exception as exc:
                 self._report_stage_failure(
@@ -362,7 +311,7 @@ class ScalpBIDSConverter:
             # events_descriptor is otherwise only built in the behavioral
             # stage; build it here too so the eeg/montage stages are
             # self-sufficient when behavioral is skipped (e.g. a re-run with
-            # --override-eeg/--override-montage but existing behavioral output).
+            # --overwrite eeg / --overwrite montage but existing behavioral output).
             self.make_event_descriptors()
         except Exception as exc:
             # Both downstream stages depend on the source EEG; fail them together.
@@ -372,7 +321,7 @@ class ScalpBIDSConverter:
         # ---------- EEG (direct pyedflib write, no MNE round-trip) ----------
         if run_eeg:
             try:
-                self.write_bids_eeg(overwrite=eeg_overwrite)
+                self.write_bids_eeg(overwrite=True)
                 self._mark_stage('eeg', 'ok')
             except Exception as exc:
                 self._report_stage_failure(['eeg'], 'EEG conversion', exc)
@@ -389,24 +338,10 @@ class ScalpBIDSConverter:
         else:
             self._mark_stage('montage', 'skipped')
 
-    def _report_stage_failure(self, stages, label, exc):
-        """Mark ``stages`` failed and surface ``exc``.
-
-        By default a stage failure is fatal: the exception is re-raised so the
-        run aborts loudly. When the converter was created with ``force=True``
-        the failure is downgraded to a ``[WARN]`` line and the run continues
-        (the legacy best-effort behavior).
-        """
-        for stage in stages:
-            self._mark_stage(stage, 'failed', exc)
-        msg = (f"{label} failed for {self.subject}, {self.experiment}, "
-               f"session {self.session}: {exc}")
-        if not self.force:
-            raise RuntimeError(msg) from exc
-        print(f"[WARN] {msg}")
-
     # ------------------------------------------------------------------
-    # Stage gating helpers (mirror intracranial converter pattern)
+    # Stage gating helpers. The shared half (_should_run, _mark_stage,
+    # stage_report, _report_stage_failure) lives in StageGatedConverter;
+    # only the filename layout below is scalp-specific.
     # ------------------------------------------------------------------
     def _bids_prefix(self):
         task = self.experiment.lower()
@@ -447,12 +382,6 @@ class ScalpBIDSConverter:
             return channels_ok and electrodes_ok
         raise ValueError(f"unknown stage: {stage!r}")
 
-    def _should_run(self, stage):
-        if self.overrides.get(stage, False):
-            return True
-        return not self._stage_outputs_exist(stage)
-
-    
     def locate_raw_file(self):
         """Find the single canonical raw EEG file for this session.
 
@@ -1002,7 +931,7 @@ class ScalpBIDSConverter:
         with open(events_json, "w") as f:
             json.dump(self.events_descriptor, f)
 
-        # scans.tsv (mirrors intracranial _update_scans_tsv).
+        # scans.tsv (shared helper, see cli.stages).
         self._update_scans_tsv(out_path)
 
     def _write_eeg_from_bdf(self, bids_path):
@@ -1100,42 +1029,19 @@ class ScalpBIDSConverter:
 
         return out_path
 
-    def _update_scans_tsv(self, eeg_file_path):
-        """Append a row for the new EEG file to ``scans.tsv``.
-
-        Ported verbatim from the intracranial converter — modality-agnostic.
-        """
-        scans_tsv = mne_bids.BIDSPath(
-            subject=self.subject,
-            session=str(self.session),
-            suffix="scans",
-            extension=".tsv",
-            root=self.root,
-        ).fpath
-        rel_path = os.path.relpath(eeg_file_path, scans_tsv.parent)
-        new_row = pd.DataFrame([{"filename": rel_path}])
-        if scans_tsv.exists():
-            existing = pd.read_csv(scans_tsv, sep="\t")
-            existing = existing[existing["filename"] != rel_path]
-            combined = pd.concat([existing, new_row], ignore_index=True)
-        else:
-            os.makedirs(scans_tsv.parent, exist_ok=True)
-            combined = new_row
-        combined.to_csv(scans_tsv, sep="\t", index=False)
-
     def write_bids_montage(self, overwrite=True):
         """Write only ``*_channels.tsv``, ``*_electrodes.tsv`` and
         ``*_coordsystem.json`` for this session — without re-encoding the
         EEG. Mirrors the intracranial converter's
         ``write_BIDS_channels`` / ``write_BIDS_electrodes`` flow so that
-        a `--override-montage` rerun can fix sidecar files in place.
+        a ``--overwrite montage`` rerun can fix sidecar files in place.
 
         Note: the on-disk EDF must already match the source recording's
         bare channel names (i.e. it must have been written with the
         ``add_ch_type=False`` fix). Older EDFs from the buggy converter
         carry ``"EEG E1"`` etc.; running this method against those will
         produce a bare-name channels.tsv that no longer matches the EDF.
-        Pair with ``--override-eeg`` for affected sessions.
+        Pair with ``--overwrite eeg`` for affected sessions.
         """
         from mne_bids.write import _channels_tsv, _write_dig_bids
 
