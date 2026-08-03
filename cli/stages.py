@@ -68,16 +68,23 @@ class StageGatedConverter:
         """Summarize stage outcomes for the per-task conversion error CSV.
 
         Only ``'failed'`` flags the job as a failure — ``'not_run'`` just
-        means the stage was never reached.
+        means the stage was never reached, and ``'no_eeg'`` means the session
+        genuinely has no recording to convert (aborted acquisition, nothing on
+        disk holding samples). ``no_eeg`` is reported separately so the
+        orchestrator can log it as a known-empty session rather than an error.
         """
         outcomes = getattr(self, 'stage_outcomes', {})
         written = [s for s in self.ALL_STAGES if outcomes.get(s) in ('ok', 'skipped')]
-        not_written = [s for s in self.ALL_STAGES if outcomes.get(s) in ('failed', 'not_run', None)]
+        not_written = [s for s in self.ALL_STAGES
+                       if outcomes.get(s) in ('failed', 'not_run', 'no_eeg', None)]
         any_failure = any(outcomes.get(s) == 'failed' for s in self.ALL_STAGES)
+        no_eeg = any(outcomes.get(s) == 'no_eeg' for s in self.ALL_STAGES)
         return {
             'files_written': written,
             'files_not_written': not_written,
             'any_failure': any_failure,
+            'no_eeg': no_eeg,
+            'no_eeg_reason': getattr(self, 'no_eeg_reason', None) if no_eeg else None,
             'error_stage': getattr(self, 'first_error_stage', None),
             'exception': getattr(self, 'first_exception', None),
         }

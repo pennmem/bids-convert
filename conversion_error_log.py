@@ -26,7 +26,18 @@ CSV_COLUMNS = [
     "cmlreader_failure",
 ]
 
-_BIDSIGNORE_PATTERN = "bids_conversion_error_*.csv"
+NOEEG_COLUMNS = [
+    "subject",
+    "experiment",
+    "session",
+    "files_written",
+    "reason",
+]
+
+_BIDSIGNORE_PATTERNS = (
+    "bids_conversion_error_*.csv",
+    "bids_conversion_noeeg_*.csv",
+)
 
 
 def cmlreader_involved(exc: BaseException) -> bool:
@@ -61,6 +72,7 @@ class ConversionErrorLog:
         self.task = task
         self._attempted: set[tuple[str, int]] = set()
         self._rows: list[dict] = []
+        self._noeeg_rows: list[dict] = []
 
     def record_attempt(self, subject: str, session):
         self._attempted.add((str(subject), int(session)))
@@ -70,10 +82,25 @@ class ConversionErrorLog:
 
         Expected keys: subject, experiment, session, files_written,
         files_not_written, any_failure, raised, error_stage, error_type,
-        error_message, cmlreader_failure. Only jobs with any_failure or
-        raised produce a row; others are recorded as attempts only.
+        error_message, cmlreader_failure, no_eeg, no_eeg_reason. Only jobs
+        with any_failure or raised produce an error row; others are recorded
+        as attempts only.
+
+        ``no_eeg`` jobs go to a separate table: the session converted as far as
+        it can, and there is simply no recording to convert (acquisition
+        aborted before the first data block, or nothing on disk holding
+        samples). Those are a property of the data, not conversion failures,
+        and mixing them into the error CSV hides the failures that matter.
         """
         self.record_attempt(result["subject"], result["session"])
+        if result.get("no_eeg"):
+            self._noeeg_rows.append({
+                "subject": str(result["subject"]),
+                "experiment": result["experiment"],
+                "session": int(result["session"]),
+                "files_written": ",".join(result.get("files_written") or []),
+                "reason": _one_line(result.get("no_eeg_reason") or "no EEG recording"),
+            })
         if not (result.get("any_failure") or result.get("raised")):
             return
         self._rows.append({
@@ -90,21 +117,38 @@ class ConversionErrorLog:
 
     def flush(self):
         os.makedirs(self.root, exist_ok=True)
-        csv_path = os.path.join(self.root, f"bids_conversion_error_{self.task}.csv")
+        csv_path = self._flush_table(
+            f"bids_conversion_error_{self.task}.csv",
+            CSV_COLUMNS, self._rows, "conversion error log",
+        )
+        self._flush_table(
+            f"bids_conversion_noeeg_{self.task}.csv",
+            NOEEG_COLUMNS, self._noeeg_rows, "no-EEG session log",
+        )
+        self._ensure_bidsignore()
+        return csv_path
+
+    def _flush_table(self, filename, columns, rows, label):
+        """Merge `rows` into `filename`, upserting by (subject, session).
+
+        Re-running a subject replaces its prior row; a subject that no longer
+        belongs in this table has its prior row dropped.
+        """
+        csv_path = os.path.join(self.root, filename)
 
         if os.path.exists(csv_path):
             try:
                 prior = pd.read_csv(csv_path, dtype={"subject": str})
             except Exception as e:
                 print(f"WARNING: could not read prior {csv_path} ({e}); starting fresh")
-                prior = pd.DataFrame(columns=CSV_COLUMNS)
+                prior = pd.DataFrame(columns=columns)
         else:
-            prior = pd.DataFrame(columns=CSV_COLUMNS)
+            prior = pd.DataFrame(columns=columns)
 
-        for col in CSV_COLUMNS:
+        for col in columns:
             if col not in prior.columns:
                 prior[col] = "" if col != "cmlreader_failure" else False
-        prior = prior[CSV_COLUMNS]
+        prior = prior[columns]
 
         if len(prior) and self._attempted:
             prior["session"] = prior["session"].astype(int)
@@ -112,7 +156,7 @@ class ConversionErrorLog:
             keep = [k not in self._attempted for k in keys]
             prior = prior.loc[keep].reset_index(drop=True)
 
-        new_df = pd.DataFrame(self._rows, columns=CSV_COLUMNS) if self._rows else pd.DataFrame(columns=CSV_COLUMNS)
+        new_df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
         merged = pd.concat([prior, new_df], ignore_index=True)
 
         if len(merged):
@@ -120,8 +164,7 @@ class ConversionErrorLog:
             merged = merged.sort_values(["subject", "session"]).reset_index(drop=True)
 
         merged.to_csv(csv_path, index=False)
-        self._ensure_bidsignore()
-        print(f"Wrote conversion error log: {csv_path} ({len(merged)} row(s))")
+        print(f"Wrote {label}: {csv_path} ({len(merged)} row(s))")
         return csv_path
 
     def _ensure_bidsignore(self):
@@ -130,8 +173,11 @@ class ConversionErrorLog:
         if os.path.exists(path):
             with open(path) as f:
                 existing = f.read()
-        if _BIDSIGNORE_PATTERN not in existing.splitlines():
+        missing = [p for p in _BIDSIGNORE_PATTERNS
+                   if p not in existing.splitlines()]
+        if missing:
             with open(path, "a") as f:
                 if existing and not existing.endswith("\n"):
                     f.write("\n")
-                f.write(_BIDSIGNORE_PATTERN + "\n")
+                for pattern in missing:
+                    f.write(pattern + "\n")

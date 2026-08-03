@@ -6,7 +6,7 @@ import os
 import sys
 import json
 import inspect
-from glob import glob
+from glob import glob, escape as glob_escape
 import shutil
 import mne_bids
 import cmlreaders as cml
@@ -44,30 +44,18 @@ class ScalpBIDSConverter(StageGatedConverter):
     # or "brainvision" (IEEE float32 .vhdr/.eeg/.vmrk). Change here in code.
     egi_output_format = "brainvision"
 
-    # Manual raw-file pins for sessions where locate_raw_file() finds more than
-    # one *real* recording and cannot safely choose (picking wrong = wrong
-    # data). Keyed by (subject_raw, session) -> chosen basename (or absolute
-    # path). Consulted before raising MultiplePathsError. Leave a session
-    # uncommented only once the lab has confirmed the intended recording.
-    MANUAL_EEG_FILE = {
-        # ---- multiple real .mff (pick the intended recording) ----
-        # ("LTP298", 9):  "LTP298_20150709_112120.mff",   # also 0624, 0707
-        # ("LTP299", 17): "LTP299_20150810_020740.mff",   # also 0806
-        # ("LTP314", 7):  "LTP314_20151028_111152.mff",   # also 100822
-        # ("LTP326", 3):  "LTP326_20160614_092306.mff",   # also 091658
-        # ---- split .bdf: both parts large & real; may need concatenation ----
-        # ("LTP344", 9):  "LTP344_session_9.bdf",   # + _9_1.bdf (2.7G)
-        # ("LTP365", 23): "LTP365_session_23.bdf",  # + _23_2.bdf (1.3G)
-        # ("LTP369", 20): "LTP369_session_20.bdf",  # + _20_2.bdf (2.6G)
-        # ("LTP386", 13): "LTP386_session_13.bdf",  # + _13_2.bdf (1.5G)
-        # ---- CourierReinstate1: two real .bdf; confirm intended recording ----
-        # (LTP592/0 and LTP605/5 also hold a second .bdf, but those are
-        #  wrong-subject strays and locate_raw_file()'s prefix filter drops them.)
-        # ("LTP565", 4): "LTP565_session_4.bdf",      # 406M + _4_2.bdf (1.9G); split?
-        # ("LTP593", 2): "LTP593_session_2.bdf",      # 1.6G + "LTP593_session_2 (2).bdf" (1.1G)
-        # ("LTP601", 3): "LTP601_session_3.bdf",      # 1.9G + "LTP601_session_3 (2).bdf" (35K stub)
-        # ("LTP602", 3): "LTP602_session_3 (2).bdf",  # 1.5G + LTP602_session_3.bdf (29M)
-    }
+    # Manual raw-file pins, for sessions the automatic resolution in
+    # locate_raw_files() cannot settle. Keyed by (subject_raw, session) ->
+    # chosen basename (or absolute path); a list/tuple of names pins a
+    # multi-part session in run order. Consulted first, ahead of
+    # ``events.eegfile``, so it can override a bad alignment.
+    #
+    # This used to carry a long commented-out block of ambiguous sessions
+    # waiting on a lab decision. Every one of them is now resolved
+    # automatically from ``events.eegfile`` — the alignment pipeline already
+    # recorded which recording(s) each session was synced to — so the block
+    # is gone. Add an entry here only when eegfile is absent or known wrong.
+    MANUAL_EEG_FILE = {}
 
     event_column_dict = {
         # Five columns present in every CourierReinstate1 session are omitted
@@ -307,42 +295,87 @@ class ScalpBIDSConverter(StageGatedConverter):
             return
 
         try:
-            self.raw_filepath = self.locate_raw_file()
-            if self.raw_filepath.endswith(".bz2"):
-                self.unzip_raw_files()
-            self.file_type = os.path.splitext(self.raw_filepath)[1]
-            self.raw_file = self.load_scalp_eeg()
-            self.set_montage()
-            self.events = self.load_events()
-            # events_descriptor is otherwise only built in the behavioral
-            # stage; build it here too so the eeg/montage stages are
-            # self-sufficient when behavioral is skipped (e.g. a re-run with
-            # --overwrite eeg / --overwrite montage but existing behavioral output).
-            self.make_event_descriptors()
+            raw_filepaths = self.locate_raw_files()
         except Exception as exc:
-            # Both downstream stages depend on the source EEG; fail them together.
             self._report_stage_failure(['eeg', 'montage'], 'EEG load', exc)
             return
 
-        # ---------- EEG (direct pyedflib write, no MNE round-trip) ----------
-        if run_eeg:
-            try:
-                self.write_bids_eeg(overwrite=True)
-                self._mark_stage('eeg', 'ok')
-            except Exception as exc:
-                self._report_stage_failure(['eeg'], 'EEG conversion', exc)
-        else:
-            self._mark_stage('eeg', 'skipped')
+        # No recording holds samples, and nothing claimed one should. That's a
+        # real property of some sessions — the recording was aborted before the
+        # first data block, or never started — not a conversion failure. The
+        # behavioral output above stands; the orchestrator logs these to
+        # bids_conversion_noeeg_*.csv rather than the error CSV.
+        if not raw_filepaths:
+            self.no_eeg_reason = (
+                "no readable recording on disk and events are not aligned to "
+                "one (events.eegfile blank)")
+            print(f"[NO EEG] {self.subject}, {self.experiment}, session "
+                  f"{self.session}: {self.no_eeg_reason}")
+            self._mark_stage('eeg', 'no_eeg')
+            self._mark_stage('montage', 'no_eeg')
+            return
 
-        # ---------- Montage (channels.tsv + electrodes.tsv only) ----------
-        if run_montage:
+        # A session recorded in more than one part gets one BIDS run per part;
+        # single-part sessions keep their unsuffixed filenames.
+        multi_run = len(raw_filepaths) > 1
+        eeg_ok, montage_ok = True, True
+
+        for index, raw_filepath in enumerate(raw_filepaths, start=1):
+            run = str(index) if multi_run else None
             try:
-                self.write_bids_montage(overwrite=True)
-                self._mark_stage('montage', 'ok')
+                self.raw_filepath = raw_filepath
+                if self.raw_filepath.endswith(".bz2"):
+                    self.unzip_raw_files()
+                self.file_type = os.path.splitext(self.raw_filepath)[1]
+                self.raw_file = self.load_scalp_eeg()
+                self.set_montage()
+                self.events = self.load_events(
+                    eegfile=self.raw_filepath if multi_run else None,
+                    sfreq=self.sfreq,
+                )
+                # events_descriptor is otherwise only built in the behavioral
+                # stage; build it here too so the eeg/montage stages are
+                # self-sufficient when behavioral is skipped (e.g. a re-run with
+                # --overwrite eeg / --overwrite montage but existing behavioral output).
+                self.make_event_descriptors()
             except Exception as exc:
-                self._report_stage_failure(['montage'], 'Montage write', exc)
-        else:
+                # Both downstream stages depend on the source EEG; fail together.
+                eeg_ok = montage_ok = False
+                self._report_stage_failure(
+                    ['eeg', 'montage'],
+                    f'EEG load{f" (run {run})" if run else ""}', exc)
+                return
+
+            # ---------- EEG (direct pyedflib write, no MNE round-trip) ----------
+            if run_eeg:
+                try:
+                    self.write_bids_eeg(overwrite=True, run=run)
+                except Exception as exc:
+                    eeg_ok = False
+                    self._report_stage_failure(
+                        ['eeg'],
+                        f'EEG conversion{f" (run {run})" if run else ""}', exc)
+
+            # ---------- Montage (channels.tsv + electrodes.tsv only) ----------
+            if run_montage:
+                try:
+                    self.write_bids_montage(overwrite=True, run=run)
+                except Exception as exc:
+                    montage_ok = False
+                    self._report_stage_failure(
+                        ['montage'],
+                        f'Montage write{f" (run {run})" if run else ""}', exc)
+
+        # A stage counts as 'ok' only when every run wrote. Failures were
+        # already marked (and, unless --force, raised) by _report_stage_failure.
+        if not run_eeg:
+            self._mark_stage('eeg', 'skipped')
+        elif eeg_ok:
+            self._mark_stage('eeg', 'ok')
+        if not run_montage:
             self._mark_stage('montage', 'skipped')
+        elif montage_ok:
+            self._mark_stage('montage', 'ok')
 
     # ------------------------------------------------------------------
     # Stage gating helpers. The shared half (_should_run, _mark_stage,
@@ -372,14 +405,32 @@ class ScalpBIDSConverter(StageGatedConverter):
             return any(os.path.exists(p) for p in (
                 os.path.join(beh_dir, f'{prefix}_beh.tsv'),
                 os.path.join(eeg_dir, f'{prefix}_events.tsv'),
-            ))
+            )) or bool(glob(os.path.join(eeg_dir, f'{prefix}_run-*_events.tsv')))
         if stage == 'eeg':
-            data_ok = any(os.path.exists(os.path.join(eeg_dir, f'{prefix}_eeg{ext}'))
-                          for ext in ('.edf', '.bdf', '.vhdr'))
-            json_ok = os.path.exists(os.path.join(eeg_dir, f'{prefix}_eeg.json'))
-            return data_ok and json_ok
+            # Glob rather than test one fixed name: a session recorded in two
+            # parts writes {prefix}_run-1_eeg.* / _run-2_eeg.*, and each data
+            # file needs its own sidecar.
+            data_files = [p for ext in ('.edf', '.bdf', '.vhdr')
+                          for p in glob(os.path.join(eeg_dir, f'{prefix}*_eeg{ext}'))]
+            if not data_files:
+                return False
+            return all(
+                os.path.exists(os.path.splitext(p)[0] + '.json')
+                for p in data_files
+            )
         if stage == 'montage':
-            channels_ok = os.path.exists(os.path.join(eeg_dir, f'{prefix}_channels.tsv'))
+            data_files = [p for ext in ('.edf', '.bdf', '.vhdr')
+                          for p in glob(os.path.join(eeg_dir, f'{prefix}*_eeg{ext}'))]
+            if data_files:
+                # One channels.tsv per recording.
+                channels_ok = all(
+                    os.path.exists(
+                        os.path.splitext(p)[0].rsplit('_eeg', 1)[0] + '_channels.tsv')
+                    for p in data_files
+                )
+            else:
+                channels_ok = os.path.exists(
+                    os.path.join(eeg_dir, f'{prefix}_channels.tsv'))
             # space-* prefix on the electrodes file: any matching tsv satisfies.
             sub_ses_prefix = f'sub-{self.subject}_ses-{self.session}'
             electrodes_ok = bool(glob(os.path.join(
@@ -388,49 +439,184 @@ class ScalpBIDSConverter(StageGatedConverter):
             return channels_ok and electrodes_ok
         raise ValueError(f"unknown stage: {stage!r}")
 
-    def locate_raw_file(self):
-        """Find the single canonical raw EEG file for this session.
+    # ------------------------------------------------------------------
+    # Locating the source recording(s)
+    # ------------------------------------------------------------------
+    RECORDING_EXTS = (".raw", ".bdf", ".mff")
 
-        Globs the session eeg dir, then filters out non-EEG and junk paths
-        before choosing:
+    def _source_eeg_dir(self):
+        return (f"/data/eeg/scalp/ltp/{self.experiment}/"
+                f"{self.subject_raw}/session_{self.session}/eeg")
+
+    def _raw_events(self):
+        """This session's CMLReader events, loaded once and cached.
+
+        Both the eegfile lookup and ``load_events`` want the same frame, and
+        load_events runs twice per session (behavioral + eeg stage); reading
+        it once keeps the eegfile-based resolution free.
+        """
+        if not hasattr(self, '_raw_events_cache'):
+            self._raw_events_cache = cml.CMLReader(
+                self.subject_raw, self.experiment, self.session
+            ).load('events')
+        return self._raw_events_cache
+
+    def eegfile_targets(self):
+        """Basenames of the recording(s) this session's events are aligned to.
+
+        ``events.eegfile`` is written by the lab's event-alignment pipeline and
+        names the raw file it actually synced against, which makes it
+        authoritative where a filename heuristic can only guess. It identifies
+        recordings whose filename was mistyped at acquisition ('LP106 ...',
+        'LTP254 ...' sitting under LTP258, 'Change This Filename.bdf'), picks
+        the intended one out of a directory holding several real recordings,
+        and points past a corrupt .mff to the intact .raw beside it.
+
+        Returns [] when the events can't be loaded or the session was never
+        aligned (eegfile blank throughout) — callers fall back to the glob
+        heuristic. Order is first appearance, i.e. chronological, i.e. run
+        order for a session recorded in more than one part.
+        """
+        try:
+            events = self._raw_events()
+        except Exception as exc:
+            print(f"  eegfile unavailable for {self.subject_raw} "
+                  f"session {self.session} ({type(exc).__name__}: {exc})")
+            return []
+        if 'eegfile' not in events.columns:
+            return []
+        seen, targets = set(), []
+        for value in events['eegfile']:
+            name = os.path.basename(str(value).strip())
+            if name and name not in seen:
+                seen.add(name)
+                targets.append(name)
+        return targets
+
+    @classmethod
+    def _recording_stem(cls, name):
+        """Strip the container extension and any trailing part number.
+
+        'LTP154_20150827_021348.2.raw' -> 'LTP154_20150827_021348', so a name
+        that differs from what's on disk only by container still matches.
+        """
+        stem = name
+        for _ in range(2):
+            base, ext = os.path.splitext(stem)
+            if ext.lower() in cls.RECORDING_EXTS or ext[1:].isdigit():
+                stem = base
+            else:
+                break
+        return stem
+
+    @classmethod
+    def _is_usable_recording(cls, path):
+        """True if `path` actually holds samples.
+
+        These session directories are full of husks that look like recordings:
+        header-only BDFs (exactly 35328 bytes, zero data records, from
+        recordings that were aborted before the first data block), zero-byte
+        and partially-decompressed .raw files whose EGI header advertises more
+        samples than the file contains, NetStation session files misnamed
+        .raw, and .mff bundles exported without a signal bin. Selecting one of
+        those is what turned a handful of empty sessions into IndexError /
+        broadcast-shape crashes deep inside the readers.
+        """
+        path = path.rstrip("/")
+        if path.endswith(".mff"):
+            return bool(glob(os.path.join(path, "signal*.bin")))
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return False
+        if size == 0:
+            return False
+        if path.endswith(".bdf"):
+            try:
+                reader = pyedflib.EdfReader(path)
+            except Exception:
+                return False
+            try:
+                return reader.datarecords_in_file > 0
+            finally:
+                reader.close()
+        # EGI simple binary: the header must parse, and the file must be long
+        # enough to hold the n_samples it advertises.
+        try:
+            from mne.io.egi.egi import _read_header
+            with open(path, "rb") as fid:
+                header = _read_header(fid)
+            row_bytes = ((header["n_channels"] + header["n_events"])
+                         * header["dtype"].itemsize)
+            needed = 36 + header["n_events"] * 4 + header["n_samples"] * row_bytes
+        except Exception:
+            return False
+        return header["samp_rate"] > 0 and size >= needed
+
+    def _resolve_eegfile(self, name, eeg_dir):
+        """Map one events.eegfile basename onto a real path in `eeg_dir`.
+
+        Exact match, then case-insensitive (plenty of recordings were saved as
+        'ltp106 ...' / 'LTp296_...' / 'Ltp329_...'), then a same-stem glob so a
+        name differing only in container resolves to its sibling.
+        """
+        exact = os.path.join(eeg_dir, name)
+        if os.path.exists(exact):
+            return exact
+        try:
+            entries = os.listdir(eeg_dir)
+        except OSError:
+            return None
+        lowered = name.lower()
+        for entry in entries:
+            if entry.lower() == lowered:
+                return os.path.join(eeg_dir, entry)
+
+        stem = self._recording_stem(name)
+        if not stem:
+            return None
+        siblings = [p for p in glob(os.path.join(eeg_dir, glob_escape(stem) + "*"))
+                    if p.rstrip("/").endswith(self.RECORDING_EXTS)]
+        if not siblings:
+            return None
+        # Prefer one that still holds data, and among those the container the
+        # events named; otherwise fall through to whatever matched.
+        usable = [p for p in siblings if self._is_usable_recording(p)] or siblings
+        wanted = os.path.splitext(name)[1].lower()
+        for path in sorted(usable):
+            if path.lower().endswith(wanted):
+                return path
+        return sorted(usable)[0]
+
+    def _heuristic_candidates(self, eeg_dir):
+        """Legacy glob + subject-prefix selection, used only when eegfile is
+        unavailable (no events, or a session that was never aligned).
+
+        Filters out non-EEG and junk paths:
           * extension whitelist: keep only names ending exactly in .raw / .bdf
             / .mff (drops .raw.txt, .raw.txt.bz2, *_GAIN.txt, *_IMP*.txt);
           * drop empty .mff placeholder dirs (e.g. *_NEVER_EXPORTED.mff and
             empty wrong-subject stubs);
           * drop files whose basename doesn't start with the subject code
-            (wrong-subject / prefixless exports);
+            (wrong-subject / prefixless exports) — matched case-insensitively,
+            since the subject code was often typed in the wrong case;
           * drop malformed basenames containing a backslash (corrupt stubs).
         When a single real .mff coexists with .raw file(s) of the same session,
-        the native .mff wins. Genuinely ambiguous sessions (multiple real .mff,
-        or split .bdf) are pinned via MANUAL_EEG_FILE, else raise
-        MultiplePathsError listing only the surviving real candidates.
+        the native .mff wins.
         """
-        eeg_dir = (f"/data/eeg/scalp/ltp/{self.experiment}/"
-                   f"{self.subject_raw}/session_{self.session}/eeg")
-
-        # Manual pin takes precedence (basename or absolute path).
-        pin = ScalpBIDSConverter.MANUAL_EEG_FILE.get(
-            (self.subject_raw, int(self.session))
-        )
-        if pin is not None:
-            pinned = pin if os.path.isabs(pin) else os.path.join(eeg_dir, pin)
-            if not os.path.exists(pinned):
-                raise FileNotFoundError(
-                    f"MANUAL_EEG_FILE pin does not exist: {pinned}")
-            print(f"Raw File (manual pin): {pinned}")
-            return pinned
-
         candidates = (glob(os.path.join(eeg_dir, "*.raw*"))
                       + glob(os.path.join(eeg_dir, "*.bdf*"))
                       + glob(os.path.join(eeg_dir, "*.mff*")))
+
+        prefix = self.subject_raw.lower()
 
         def _keep(p):
             base = os.path.basename(p)
             if "\\" in base:                       # malformed / corrupt stub
                 return False
-            if not base.startswith(self.subject_raw):   # wrong-subject / prefixless
+            if not base.lower().startswith(prefix):  # wrong-subject / prefixless
                 return False
-            if not base.endswith((".raw", ".bdf", ".mff")):  # sidecars
+            if not base.endswith(self.RECORDING_EXTS):  # sidecars
                 return False
             if base.endswith(".mff") and os.path.isdir(p) and not os.listdir(p):
                 return False                       # empty .mff placeholder
@@ -446,25 +632,104 @@ class ScalpBIDSConverter(StageGatedConverter):
                 seen.add(rp)
                 deduped.append(p)
 
-        if len(deduped) == 0:
-            raise FileNotFoundError(
-                f"No raw EEG file found in {eeg_dir} "
-                f"(candidates before filtering: {candidates})")
-        if len(deduped) == 1:
-            print(f"Raw File Found: {deduped[0]}")
-            return deduped[0]
+        if len(deduped) <= 1:
+            return deduped, candidates
 
         # >1 survivor: prefer a single native .mff over .raw file(s).
         mffs = [p for p in deduped if p.endswith(".mff")]
         non_mff = [p for p in deduped if not p.endswith(".mff")]
         if len(mffs) == 1 and all(p.endswith(".raw") for p in non_mff):
-            print(f"Raw File Found (preferring .mff over .raw): {mffs[0]}")
-            return mffs[0]
+            return [mffs[0]], candidates
+        return deduped, candidates
 
-        raise MultiplePathsError(
-            f"Multiple real EEG files for {self.subject_raw} "
-            f"session {self.session}; pin one in MANUAL_EEG_FILE: {deduped}")
-    
+    def locate_raw_files(self):
+        """Ordered list of the raw recording file(s) backing this session.
+
+        Normally one path. A session whose recording was stopped and restarted
+        mid-way returns one path per part in run order — those are real
+        two-part sessions (events split cleanly between the parts, each with
+        its own eegoffset origin), and ``run()`` writes them as separate BIDS
+        runs rather than picking one and silently dropping half the session.
+
+        Precedence:
+          1. ``MANUAL_EEG_FILE``, for anything the lab has pinned by hand.
+          2. ``events.eegfile`` — see ``eegfile_targets``. The container it
+             names is honoured as-is: several sessions carry a corrupt .mff
+             beside an intact .raw, and eegfile names the .raw.
+          3. The legacy glob heuristic, for sessions with no usable events.
+
+        Returns [] when nothing on disk holds samples. That is a real property
+        of some sessions (aborted recordings), not an error — ``run()`` turns
+        it into a 'no_eeg' outcome and still writes behavioral output.
+        """
+        eeg_dir = self._source_eeg_dir()
+
+        pin = ScalpBIDSConverter.MANUAL_EEG_FILE.get(
+            (self.subject_raw, int(self.session))
+        )
+        if pin is not None:
+            names = [pin] if isinstance(pin, str) else list(pin)
+            pinned = []
+            for name in names:
+                path = name if os.path.isabs(name) else os.path.join(eeg_dir, name)
+                if not os.path.exists(path):
+                    raise FileNotFoundError(
+                        f"MANUAL_EEG_FILE pin does not exist: {path}")
+                pinned.append(path)
+            print(f"Raw File (manual pin): {pinned}")
+            return pinned
+
+        targets = self.eegfile_targets()
+        if targets:
+            resolved, missing = [], []
+            for name in targets:
+                path = self._resolve_eegfile(name, eeg_dir)
+                if path is None:
+                    missing.append(name)
+                elif self._is_usable_recording(path):
+                    resolved.append(path)
+                else:
+                    missing.append(f"{name} (no samples)")
+            if resolved:
+                note = f" [unresolved: {missing}]" if missing else ""
+                print(f"Raw File(s) from events.eegfile: {resolved}{note}")
+                return resolved
+            # eegfile named files we can't use. Don't silently guess something
+            # else — that risks converting the wrong recording.
+            raise FileNotFoundError(
+                f"events.eegfile for {self.subject_raw} session {self.session} "
+                f"names {targets}, none of which resolve to a readable "
+                f"recording in {eeg_dir} ({missing})")
+
+        deduped, candidates = self._heuristic_candidates(eeg_dir)
+        usable = [p for p in deduped if self._is_usable_recording(p)]
+        if not usable:
+            print(f"No usable raw EEG for {self.subject_raw} session "
+                  f"{self.session} in {eeg_dir} "
+                  f"(candidates before filtering: {candidates})")
+            return []
+        if len(usable) > 1:
+            raise MultiplePathsError(
+                f"Multiple real EEG files for {self.subject_raw} "
+                f"session {self.session} and no events.eegfile to choose "
+                f"between them; pin one in MANUAL_EEG_FILE: {usable}")
+        print(f"Raw File Found (heuristic): {usable[0]}")
+        return usable
+
+    def locate_raw_file(self):
+        """The first (usually only) recording for this session.
+
+        Kept for callers that predate multi-part sessions; prefer
+        ``locate_raw_files``.
+        """
+        paths = self.locate_raw_files()
+        if not paths:
+            raise FileNotFoundError(
+                f"No usable raw EEG file for {self.subject_raw} "
+                f"session {self.session}")
+        return paths[0]
+
+
     def load_scalp_eeg(self):
         if self.file_type == ".bdf":
             raw = mne.io.read_raw_bdf(self.raw_filepath, stim_channel='Status', preload=False)
@@ -547,9 +812,21 @@ class ScalpBIDSConverter(StageGatedConverter):
         else:
             raise Exception("Wordpool not known for this experiment.")
     
-    def load_events(self, beh_only=False):
-        reader = cml.CMLReader(self.subject_raw, self.experiment, self.session)
-        events = reader.load('events')
+    def load_events(self, beh_only=False, eegfile=None, sfreq=None):
+        """Build the BIDS events table for this session.
+
+        ``eegfile`` restricts the table to the events aligned to one
+        recording, for sessions recorded in more than one part. Each part
+        carries its own eegoffset origin, so onsets are computed against that
+        part's own ``sfreq`` — pass it in rather than relying on
+        ``self.sfreq``, which tracks whichever part was loaded last. Events
+        with a blank eegfile were never aligned to any recording and belong in
+        the behavioral table only, so they are dropped here.
+        """
+        events = self._raw_events().copy()
+        if eegfile is not None:
+            aligned = events['eegfile'].map(lambda p: os.path.basename(str(p).strip()))
+            events = events[aligned == os.path.basename(eegfile)]
         events = events.rename(columns={"eegoffset":"sample", "type":"trial_type"})
         ## math distractor
         if "test" in events.columns:
@@ -561,7 +838,7 @@ class ScalpBIDSConverter(StageGatedConverter):
             standard_cols = ["mstime", "trial_type", 'stim_file']
             events["mstime"] = events["mstime"] - events["mstime"].iloc[0]
         else:
-            events['onset'] = events['sample'] / self.sfreq
+            events['onset'] = events['sample'] / (sfreq or self.sfreq)
             events['duration'] = "n/a"
             standard_cols = ['onset', 'duration', "trial_type", "sample", 'stim_file']
         events['stim_file'] = np.where(events.trial_type.str.contains("WORD"), self.wordpool_file, "n/a")
@@ -894,7 +1171,7 @@ class ScalpBIDSConverter(StageGatedConverter):
         with open(bids_path.update(suffix="beh", extension=".json").fpath, "w") as f:
             json.dump(fp=f, obj = self.events_descriptor)
     
-    def write_bids_eeg(self, overwrite=True):
+    def write_bids_eeg(self, overwrite=True, run=None):
         """Write the EEG file as a bit-exact digital copy of the source.
 
         BDF inputs are read with ``pyedflib`` and written back via
@@ -904,11 +1181,15 @@ class ScalpBIDSConverter(StageGatedConverter):
         must still be decoded by MNE (pyedflib cannot read EGI), but the
         EDF write goes straight through pyedflib — no
         ``mne.export.export_raw`` round-trip, no ``mne_bids.write_raw_bids``.
+
+        ``run`` adds a ``run-<n>`` entity, for a session recorded in more than
+        one part. Left None for the single-recording case so the vast majority
+        of filenames stay unsuffixed.
         """
         task_name = self.experiment.lower()
         bids_path = mne_bids.BIDSPath(
             subject=self.subject, session=str(self.session),
-            task=task_name, datatype="eeg", root=self.root,
+            task=task_name, run=run, datatype="eeg", root=self.root,
         )
 
         if self.file_type == ".bdf":
@@ -919,7 +1200,7 @@ class ScalpBIDSConverter(StageGatedConverter):
             out_path = self._write_eeg_from_egi(bids_path)
 
         # Channels / electrodes / coordsystem — unchanged.
-        self.write_bids_montage(overwrite=overwrite)
+        self.write_bids_montage(overwrite=overwrite, run=run)
 
         # Sidecar JSON — write directly (no mne_bids.update_sidecar_json).
         sidecar_path = bids_path.copy().update(
@@ -974,6 +1255,41 @@ class ScalpBIDSConverter(StageGatedConverter):
         )
         return out_path
 
+    def _scrub_nonfinite(self, raw):
+        """Zero out non-finite samples, recording which channels were hit.
+
+        A run of EGI sessions from 2013 decodes with a handful of ±inf samples
+        on one channel in the first few seconds — a saturated electrode at
+        recording onset, not file corruption (LTP244 ses-18: 49 samples on
+        E124 between samples 1038 and 2190; LTP247 ses-14: 76 samples, same
+        channel, same window). pybv refuses to write them at all, so the whole
+        session used to fail. Zero-filling the affected samples lets the
+        session convert; ``write_bids_montage`` then marks those channels
+        ``status=bad`` in channels.tsv so the substitution stays visible
+        downstream rather than passing as clean signal.
+
+        Populates ``self.nonfinite_channels`` (used by write_bids_montage) and
+        returns the raw, modified in place.
+        """
+        self.nonfinite_channels = {}
+        data = raw.get_data()
+        bad = ~np.isfinite(data)
+        if not bad.any():
+            return raw
+        for ch_index in np.unique(np.nonzero(bad)[0]):
+            samples = np.nonzero(bad[ch_index])[0]
+            self.nonfinite_channels[raw.ch_names[ch_index]] = (
+                len(samples), int(samples[0]), int(samples[-1]))
+        # get_data() may hand back a view or a copy depending on preload;
+        # write through _data so the change lands on the object we export.
+        raw.load_data()
+        raw._data[bad] = 0.0
+        for name, (count, first, last) in self.nonfinite_channels.items():
+            print(f"[WARN] {self.subject} {self.experiment} ses-{self.session}: "
+                  f"{count} non-finite samples on {name} (samples {first}-{last}) "
+                  f"zero-filled; channel marked bad")
+        return raw
+
     def _write_eeg_from_egi(self, bids_path):
         """EGI .raw / .mff → BDF.
 
@@ -988,7 +1304,7 @@ class ScalpBIDSConverter(StageGatedConverter):
         ).fpath
         os.makedirs(out_path.parent, exist_ok=True)
 
-        raw = self.raw_file.copy().pick(['eeg', 'eog'])
+        raw = self._scrub_nonfinite(self.raw_file.copy().pick(['eeg', 'eog']))
         labels = list(raw.ch_names)
         sfreq = float(raw.info['sfreq'])
 
@@ -1025,7 +1341,7 @@ class ScalpBIDSConverter(StageGatedConverter):
         ).fpath
         os.makedirs(out_path.parent, exist_ok=True)
 
-        raw = self.raw_file.copy().pick(['eeg', 'eog'])
+        raw = self._scrub_nonfinite(self.raw_file.copy().pick(['eeg', 'eog']))
         peak = float(np.max(np.abs(raw.get_data()))) or 1e-6
         print(
             f"  EGI BrainVision path: peak={peak:.3e} V, float32 "
@@ -1037,7 +1353,7 @@ class ScalpBIDSConverter(StageGatedConverter):
 
         return out_path
 
-    def write_bids_montage(self, overwrite=True):
+    def write_bids_montage(self, overwrite=True, run=None):
         """Write only ``*_channels.tsv``, ``*_electrodes.tsv`` and
         ``*_coordsystem.json`` for this session — without re-encoding the
         EEG. Mirrors the intracranial converter's
@@ -1056,7 +1372,7 @@ class ScalpBIDSConverter(StageGatedConverter):
         task_name = self.experiment.lower()
         bids_path = mne_bids.BIDSPath(
             subject=self.subject, session=str(self.session),
-            task=task_name, datatype="eeg", root=self.root,
+            task=task_name, run=run, datatype="eeg", root=self.root,
         )
         os.makedirs(bids_path.directory, exist_ok=True)
 
@@ -1082,5 +1398,29 @@ class ScalpBIDSConverter(StageGatedConverter):
         if "convert_fmt" in inspect.signature(_channels_tsv).parameters:
             channels_kwargs["convert_fmt"] = None
         _channels_tsv(raw_for_tsv, channels_path.fpath, **channels_kwargs)
+        self._flag_nonfinite_channels(channels_path.fpath)
         _write_dig_bids(bids_path, raw_for_tsv,
                         montage=self.montage, overwrite=overwrite)
+
+    def _flag_nonfinite_channels(self, channels_tsv):
+        """Mark channels whose non-finite samples were zero-filled as bad.
+
+        Runs after ``_channels_tsv`` has written the file, so the substitution
+        made in ``_scrub_nonfinite`` is recorded where a reader will find it
+        instead of silently passing as clean signal.
+        """
+        flagged = getattr(self, 'nonfinite_channels', None)
+        if not flagged:
+            return
+        channels = pd.read_csv(channels_tsv, sep="\t")
+        if 'status' not in channels.columns:
+            channels['status'] = 'good'
+        if 'status_description' not in channels.columns:
+            channels['status_description'] = 'n/a'
+        for name, (count, first, last) in flagged.items():
+            row = channels['name'] == name
+            channels.loc[row, 'status'] = 'bad'
+            channels.loc[row, 'status_description'] = (
+                f"{count} non-finite samples (samples {first}-{last}) "
+                f"zero-filled during conversion")
+        channels.to_csv(channels_tsv, sep="\t", index=False)

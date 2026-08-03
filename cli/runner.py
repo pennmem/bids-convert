@@ -25,7 +25,8 @@ from bids_validation import session_log_dir, session_tag, tee_to_file  # noqa: E
 # ----------------------------------------------------------------------
 def _result(status, subject, experiment, session, root, *, files_written=(),
             files_not_written=(), any_failure=False, raised=False, error_stage="",
-            error_type="", error_message="", cmlreader_failure=False, message=""):
+            error_type="", error_message="", cmlreader_failure=False, message="",
+            no_eeg=False, no_eeg_reason=""):
     return {
         "status": status,
         "subject": str(subject),
@@ -36,6 +37,8 @@ def _result(status, subject, experiment, session, root, *, files_written=(),
         "files_not_written": list(files_not_written),
         "any_failure": bool(any_failure),
         "raised": bool(raised),
+        "no_eeg": bool(no_eeg),
+        "no_eeg_reason": no_eeg_reason or "",
         "error_stage": error_stage or "",
         "error_type": error_type or "",
         "error_message": error_message or "",
@@ -97,6 +100,9 @@ def convert_one_job(subject, experiment, session, *, root, overrides, force, job
         detail = f"{type(first_exc).__name__}: {first_exc}" if first_exc is not None else "see log"
         detail = " ".join(str(detail).splitlines()).strip()
         message = (f"FAILED at '{error_stage}': {subject} {experiment} {session} — {detail}")
+    elif report.get("no_eeg"):
+        message = (f"DONE (no EEG): {subject} {experiment} {session} — "
+                   f"{report.get('no_eeg_reason') or 'no recording to convert'}")
     else:
         message = f"DONE: {subject} {experiment} {session}"
 
@@ -106,6 +112,8 @@ def convert_one_job(subject, experiment, session, *, root, overrides, force, job
         files_not_written=report["files_not_written"],
         any_failure=failed,
         raised=exc is not None,
+        no_eeg=report.get("no_eeg", False),
+        no_eeg_reason=report.get("no_eeg_reason") or "",
         error_stage=error_stage,
         error_type=type(first_exc).__name__ if first_exc is not None else "",
         error_message=" ".join(str(first_exc).splitlines()).strip() if first_exc is not None else "",
