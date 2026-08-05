@@ -110,6 +110,16 @@ def _patch_cmlreaders_params_reader():
             df["session"] = self.session
         if self.session is not None:
             df = df[df["session"] == self.session]
+        # A few old sessions were never aligned to EEG, so their events.mat has
+        # no `eegoffset`/`eegfile` at all (e.g. FR170). cmlreaders' as_dataframe
+        # unconditionally reorders with `eegoffset` first and raises KeyError.
+        # Supply the columns as "unaligned" so the events still load; the
+        # converter degrades these sessions to a no_eeg outcome and keeps the
+        # behavioral output.
+        if "eegoffset" not in df.columns:
+            df["eegoffset"] = np.nan
+        if "eegfile" not in df.columns:
+            df["eegfile"] = ""
         # Some System-1 events store `eegfile` as a numpy array, and some old
         # sessions store it as a float/NaN scalar; both break cmlreaders'
         # to_absolute. Coerce here (and again at _eegfile_absolute, which also
@@ -146,6 +156,56 @@ def _patch_cmlreaders_params_reader():
 
     _orig_find = PathFinder.find
 
+    # `sources` and the localization tables, keyed by the glob to try inside
+    # the session's own EEG directory once {subject} interpolation has missed.
+    _NESTED_PATTERNS = {
+        "sources": ("eeg.noreref/params.txt",),
+        "contacts": ("tal/{subject}_talLocs_database_monopol.mat",
+                     "tal/{subject}_talLocs_database.mat"),
+        "matlab_contacts": ("tal/{subject}_talLocs_database_monopol.mat",
+                            "tal/{subject}_talLocs_database.mat"),
+        "pairs": ("tal/{subject}_talLocs_database_bipol.mat",),
+        "matlab_pairs": ("tal/{subject}_talLocs_database_bipol.mat",),
+    }
+
+    def _eeg_dir_from_eegfile(finder):
+        """The session's real data directory, via its events `eegfile`.
+
+        Returns a Path, or None if the events / eegfile can't be resolved
+        (callers then re-raise the original lookup error).
+        """
+        import scipy.io as sio
+        try:
+            events_path = _find(finder, "task_events")
+            evs = sio.loadmat(events_path, squeeze_me=True)["events"]
+            df = pd.DataFrame(evs)
+            if "session" in df.columns and finder.session is not None:
+                sess = df[df["session"] == int(finder.session)]
+                if len(sess):
+                    df = sess
+            if "eegfile" not in df.columns:
+                return None
+            eegfiles = [f for f in df["eegfile"].map(_eegfile_to_str) if f]
+            if not eegfiles:
+                return None
+        except BaseException:
+            return None
+
+        # <eeg_dir>/eeg.reref/<basename> -> <eeg_dir>
+        return _Path(eegfiles[0]).parent.parent
+
+    def _nested_lookup(finder, data_type):
+        """Retry a {subject}-interpolated lookup inside the session's own
+        EEG directory. Returns the path, or None if nothing matches."""
+        eeg_dir = _eeg_dir_from_eegfile(finder)
+        if eeg_dir is None:
+            return None
+        for pattern in _NESTED_PATTERNS.get(data_type, ()):
+            cand = eeg_dir / pattern.format(subject=finder.subject)
+            if cand.exists():
+                return str(cand)
+        return None
+
     def _find(self, data_type, *args, **kwargs):
         try:
             return _orig_find(self, data_type, *args, **kwargs)
@@ -155,9 +215,22 @@ def _patch_cmlreaders_params_reader():
             # resolves `{subject}_events.mat` and misses the real
             # `{subject}_{montage}_events.mat`. Fall back to the montage-suffixed
             # events file on a miss.
-            if data_type not in ("task_events", "all_events"):
-                raise
             if getattr(self, "experiment", None) != "pyFR":
+                raise
+            if data_type in _NESTED_PATTERNS:
+                # A few old subjects keep their data nested under a parent
+                # subject directory (CH008b lives in /data/eeg/CH008/CH008b),
+                # but these path templates interpolate only {subject}, so both
+                # params.txt and the tal/ localization are missed. The events'
+                # `eegfile` points at the real directory, so derive it from
+                # there. Globbing /data/eeg/*/{subject} instead would be wrong:
+                # some nested directories hold a genuinely different subject
+                # (e.g. /data/eeg/R1021D/R1020J).
+                found = _nested_lookup(self, data_type)
+                if found:
+                    return found
+                raise
+            if data_type not in ("task_events", "all_events"):
                 raise
             root = getattr(self, "rootdir", "") or "/"
             cands = sorted(_glob.glob(os.path.join(
@@ -455,8 +528,25 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         except (OSError, ValueError):
             return None
 
-    def _available_cml_spaces(self):
+    def _available_cml_spaces(self, source='contacts'):
+        # pyFR localization is flat (bare x/y/z == Talairach) rather than the
+        # `<space>.x` columns the base class expects, so both the monopolar and
+        # bipolar space lists are derived here.
         available = []
+        if source == 'pairs':
+            pairs = getattr(self, 'pairs_all', getattr(self, 'pairs', None))
+            if pairs is None:
+                return available
+            cols = set(pairs.columns)
+            if {'x', 'y', 'z'}.issubset(cols):
+                available.append('tal')
+            # MNI pair coords are derived as the midpoint of the two contacts,
+            # so they need both the coords file and the pair->contact mapping.
+            if ({'contact_1', 'contact_2'}.issubset(cols)
+                    and self._load_mni_coords() is not None):
+                available.append('mni')
+            return available
+
         cols = set(self.contacts.columns)
         if {'x', 'y', 'z'}.issubset(cols):
             available.append('tal')
@@ -515,6 +605,88 @@ class pyFR_BIDS_converter(intracranial_BIDS_converter):
         electrodes = electrodes[['name', 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type',
                                  'lobe', 'region1', 'region2', 'gray_white']]
         return electrodes
+
+    # ---------- Bipolar electrodes (deprecated, non-BIDS localization) ----------
+    # The base implementations read `<space>.x` coord columns and the
+    # `area` / `brain_regions` attributes, none of which exist for pyFR
+    # (flat x/y/z, Loc1-Loc5 region labels, no area/brain_regions config).
+    def pairs_to_bipolar_electrodes(self, cml_space):
+        pairs = getattr(self, 'pairs_all', self.pairs)
+        labels = np.array(pairs.label)
+        names = [self._truncate_bipolar(n) if len(n) > 16 else n for n in labels]
+        electrodes = pd.DataFrame({'name': names})
+        electrodes['label_full'] = labels
+
+        for col in ('contact_1', 'contact_2'):
+            electrodes[col] = pairs[col].values if col in pairs.columns else np.nan
+
+        if cml_space == 'tal':
+            # pairs.json already stores the Talairach pair midpoint.
+            for axis in ('x', 'y', 'z'):
+                electrodes[axis] = pairs[axis].astype(float).values
+        elif cml_space == 'mni':
+            # No MNI pair table exists, so take the midpoint of the two
+            # contacts' MNI coords; NaN if either contact is missing from the
+            # coords file (it can be shorter than the contacts table).
+            coord_map = {int(row[0]): row[1:4] for row in self._load_mni_coords()}
+            nan3 = (np.nan, np.nan, np.nan)
+            xyz = np.array([
+                np.mean([coord_map.get(int(c1), nan3), coord_map.get(int(c2), nan3)], axis=0)
+                for c1, c2 in zip(pairs.contact_1, pairs.contact_2)
+            ], dtype=float)
+            electrodes['x'], electrodes['y'], electrodes['z'] = xyz[:, 0], xyz[:, 1], xyz[:, 2]
+        else:
+            electrodes['x'] = electrodes['y'] = electrodes['z'] = np.nan
+
+        electrodes['size'] = -999
+        # same shank rule as the base pairs_to_channels
+        electrodes['group'] = [re.sub(r'\d+', '', x).split('-')[0] for x in labels]
+        loc1 = pairs['Loc1'] if 'Loc1' in pairs.columns else ['n/a'] * len(pairs)
+        electrodes['hemisphere'] = ['L' if isinstance(x, str) and 'Left' in x
+                                    else 'R' if isinstance(x, str) and 'Right' in x
+                                    else 'n/a' for x in loc1]
+        electrodes['type'] = [self.ELEC_TYPES_DESCRIPTION.get(x) if isinstance(x, str) else None
+                              for x in pairs['type']]
+        electrodes['lobe'] = np.array(pairs['Loc2']) if 'Loc2' in pairs.columns else 'n/a'
+        electrodes['region1'] = np.array(pairs['Loc3']) if 'Loc3' in pairs.columns else 'n/a'
+        electrodes['region2'] = np.array(pairs['Loc5']) if 'Loc5' in pairs.columns else 'n/a'
+        electrodes['gray_white'] = np.array(pairs['Loc4']) if 'Loc4' in pairs.columns else 'n/a'
+        electrodes = electrodes.fillna('n/a')
+        electrodes = electrodes.replace('', 'n/a')
+        electrodes = electrodes[['name', 'label_full', 'contact_1', 'contact_2',
+                                 'x', 'y', 'z', 'size', 'group', 'hemisphere', 'type',
+                                 'lobe', 'region1', 'region2', 'gray_white']]
+        return electrodes
+
+    def make_bipolar_electrodes_sidecar(self, cml_space):
+        from ..intracranial_BIDS_converter import CML_TO_BIDS_SPACE
+        bids_space = CML_TO_BIDS_SPACE[cml_space]
+        midpoint = ('mean of the two contacts' if cml_space == 'mni'
+                    else 'taken directly from pairs.json')
+        return {
+            "Description": (
+                "DEPRECATED, non-BIDS bipolar localization. BIDS has no "
+                "bipolar-electrode concept; this table preserves the original "
+                "CML pair localization (midpoint coordinates + region labels) "
+                "for replicability. Pair region labels cannot be recomputed "
+                f"from the monopolar electrodes.tsv. x/y/z are the pair midpoint: {midpoint}."
+            ),
+            "name":       {"Description": "Truncated bipolar pair label (matches acq-bipolar_channels.tsv 'name')."},
+            "label_full": {"Description": "Full, untruncated bipolar pair label."},
+            "contact_1":  {"Description": "Contact number of the first (anode) contact of the pair."},
+            "contact_2":  {"Description": "Contact number of the second (cathode) contact of the pair."},
+            "x":          {"Description": f"x-axis position in {bids_space} coordinates."},
+            "y":          {"Description": f"y-axis position in {bids_space} coordinates."},
+            "z":          {"Description": f"z-axis position in {bids_space} coordinates."},
+            "size":       {"Description": "Surface area of electrode."},
+            "group":      {"Description": "Group of channels electrode belongs to (same shank)."},
+            "hemisphere": {"Description": "Hemisphere of electrode location."},
+            "type":       {"Description": "Type of electrode."},
+            "lobe":       {"Description": "Brain lobe of electrode location."},
+            "region1":    {"Description": "Brain region of electrode location."},
+            "region2":    {"Description": "Brain region of electrode location."},
+            "gray_white": {"Description": "Denotes gray or white matter."},
+        }
 
     def make_electrodes_sidecar(self, cml_space):
         from ..intracranial_BIDS_converter import CML_TO_BIDS_SPACE

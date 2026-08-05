@@ -268,9 +268,56 @@ class intracranial_BIDS_converter(StageGatedConverter):
         event's mstime: the EEG does not start at the first behavioral event,
         and the wall clock drifts from the sample clock whenever the recording
         is a clip of a longer session. Rows with no valid recording sample
-        (eegoffset < 0, i.e. events before EEG start) get 'n/a'."""
-        onset = events["sample"] / self._sfreq_hz()
-        return onset.mask(events["sample"] < 0, "n/a")
+        (eegoffset < 0, i.e. events before EEG start, or NaN where the session
+        was never aligned) get 'n/a'.
+
+        A session with no alignment at all, or with no EEG source metadata on
+        disk, is not a conversion failure: the behavioral output still stands,
+        it just has no recording to be relative to. Both cases degrade to an
+        all-'n/a' onset column and flag the session via _mark_no_eeg(), which
+        run() turns into a 'no_eeg' outcome for the EEG-dependent stages."""
+        sample = pd.to_numeric(events["sample"], errors="coerce")
+        aligned = sample >= 0
+
+        if not aligned.any():
+            self._mark_no_eeg("events are not aligned to a recording "
+                              "(no valid eegoffset)")
+            return pd.Series("n/a", index=events.index)
+
+        try:
+            sfreq = self._sfreq_hz()
+        except Exception as e:
+            self._mark_no_eeg("no EEG source metadata on disk "
+                              f"(sources.json/params.txt missing: {type(e).__name__})")
+            return pd.Series("n/a", index=events.index)
+
+        return (sample / sfreq).mask(~aligned, "n/a")
+
+    def _localization_absent_ok(self, stages, exc):
+        """Whether a missing localization table is expected rather than a bug.
+
+        Only for sessions already known to have no usable recording: those are
+        behavioral-only sessions that were never localized, so there is nothing
+        to write. A session WITH EEG but no localization is a real problem and
+        still fails. Returns True if the stages were marked 'no_eeg'."""
+        if not getattr(self, 'no_eeg_reason', None):
+            return False
+        print(f"[NO EEG] {self.subject}, {self.experiment}, session {self.session}: "
+              f"no localization on disk either ({type(exc).__name__}) — "
+              f"nothing to write for {', '.join(stages)}")
+        for stage in stages:
+            self._mark_stage(stage, 'no_eeg')
+        return True
+
+    def _mark_no_eeg(self, reason):
+        """Record that this session has no usable EEG recording.
+
+        Keeps the first reason seen; run() reports it to the orchestrator so
+        the session is logged as known-empty rather than as an error."""
+        if not getattr(self, 'no_eeg_reason', None):
+            self.no_eeg_reason = reason
+            print(f"[NO EEG] {self.subject}, {self.experiment}, "
+                  f"session {self.session}: {reason}")
 
     def set_wordpool(self):
         raise NotImplementedError       # override in subclass
@@ -1398,6 +1445,17 @@ class intracranial_BIDS_converter(StageGatedConverter):
         run_electrodes = self._should_run('electrodes')
         run_bi_electrodes = self._should_run('bi-electrodes')
 
+        # A session with no recording (or no alignment to one) has nothing for
+        # the EEG-dependent stages to convert. Localization is independent of
+        # the recording, so electrodes/bi-electrodes still run below.
+        if getattr(self, 'no_eeg_reason', None):
+            for stage, wanted in (('mono-eeg', run_mono_eeg), ('bi-eeg', run_bi_eeg),
+                                  ('mono-channels', run_mono_channels),
+                                  ('bi-channels', run_bi_channels)):
+                if wanted:
+                    self._mark_stage(stage, 'no_eeg')
+            run_mono_eeg = run_bi_eeg = run_mono_channels = run_bi_channels = False
+
         print(f"DEBUG: run_electrodes={run_electrodes} run_bi_electrodes={run_bi_electrodes} "
               f"run_mono_eeg={run_mono_eeg} run_bi_eeg={run_bi_eeg} "
               f"run_mono_channels={run_mono_channels} run_bi_channels={run_bi_channels}")
@@ -1436,6 +1494,15 @@ class intracranial_BIDS_converter(StageGatedConverter):
                 self.contacts_all = self.contacts.copy()
                 self.contacts, self.contacts_dropped = self._filter_scheme_to_recording(self.contacts, "contacts")
                 contacts_loaded = True
+            except FileNotFoundError as e:
+                if self._localization_absent_ok(['electrodes'], e):
+                    run_electrodes = run_mono_eeg = run_mono_channels = False
+                else:
+                    failed = [s for s, wanted in (('electrodes', run_electrodes),
+                                                  ('mono-eeg', run_mono_eeg),
+                                                  ('mono-channels', run_mono_channels)) if wanted]
+                    run_electrodes = run_mono_eeg = run_mono_channels = False
+                    self._report_stage_failure(failed, 'Contacts load', e)
             except Exception as e:
                 # Every monopolar stage depends on contacts; fail them together.
                 failed = [s for s, wanted in (('electrodes', run_electrodes),
@@ -1460,7 +1527,7 @@ class intracranial_BIDS_converter(StageGatedConverter):
                 self._mark_stage('electrodes', 'ok')
             except Exception as e:
                 self._report_stage_failure(['electrodes'], 'Electrodes write', e)
-        else:
+        elif self.stage_outcomes.get('electrodes') == 'not_run':
             self._mark_stage('electrodes', 'skipped')
             print(f"SKIP: electrodes outputs exist for {self.subject}/{self.experiment}/ses-{self.session}")
 
@@ -1470,6 +1537,15 @@ class intracranial_BIDS_converter(StageGatedConverter):
                 self.pairs = self.load_pairs()
                 self.pairs_all = self.pairs.copy()
                 self.pairs, self.pairs_dropped = self._filter_scheme_to_recording(self.pairs, "pairs")
+            except FileNotFoundError as e:
+                if self._localization_absent_ok(['bi-electrodes'], e):
+                    run_bi_channels = run_bi_eeg = run_bi_electrodes = False
+                else:
+                    failed = [s for s, wanted in (('bi-eeg', run_bi_eeg),
+                                                  ('bi-channels', run_bi_channels),
+                                                  ('bi-electrodes', run_bi_electrodes)) if wanted]
+                    run_bi_channels = run_bi_eeg = run_bi_electrodes = False
+                    self._report_stage_failure(failed, 'Bipolar pairs load', e)
             except Exception as e:
                 # Every bipolar stage depends on pairs; fail them together.
                 failed = [s for s, wanted in (('bi-eeg', run_bi_eeg),
@@ -1533,7 +1609,7 @@ class intracranial_BIDS_converter(StageGatedConverter):
                 self._mark_stage('mono-eeg', 'ok')
             except Exception as e:
                 self._report_stage_failure(['mono-eeg'], 'Monopolar EEG conversion', e)
-        else:
+        elif self.stage_outcomes.get('mono-eeg') == 'not_run':
             self._mark_stage('mono-eeg', 'skipped')
 
         if run_mono_channels:
@@ -1544,7 +1620,7 @@ class intracranial_BIDS_converter(StageGatedConverter):
                 self._mark_stage('mono-channels', 'ok')
             except Exception as e:
                 self._report_stage_failure(['mono-channels'], 'Monopolar channels write', e)
-        else:
+        elif self.stage_outcomes.get('mono-channels') == 'not_run':
             self._mark_stage('mono-channels', 'skipped')
 
         return True
